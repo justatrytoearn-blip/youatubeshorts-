@@ -1,0 +1,5 @@
+requests
+edge-tts
+mutagen
+google-api-python-client
+google-auth-oauthlib

@@ -32,15 +32,33 @@ def pexels_key():
     return key
 
 
+def _retry(fn, tries=3, base=2.0):
+    """Retry helper with backoff for flaky mobile networks."""
+    import time
+    last = None
+    for i in range(tries):
+        try:
+            return fn()
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            if i < tries - 1:
+                time.sleep(base * (2 ** i))
+    raise last
+
+
 def search_videos(query: str, per_page: int = 10, orientation: str = "portrait"):
     """Return list of candidate video files (portrait, HD)."""
-    r = requests.get(
-        PEXELS_VIDEO_URL,
-        headers={"Authorization": pexels_key(), **UA},
-        params={"query": query, "per_page": per_page, "orientation": orientation},
-        timeout=30,
-    )
-    r.raise_for_status()
+    def _call():
+        r = requests.get(
+            PEXELS_VIDEO_URL,
+            headers={"Authorization": pexels_key(), **UA},
+            params={"query": query, "per_page": per_page,
+                    "orientation": orientation},
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r
+    r = _retry(_call)
     results = []
     for vid in r.json().get("videos", []):
         files = vid.get("video_files", [])
@@ -63,10 +81,16 @@ def search_videos(query: str, per_page: int = 10, orientation: str = "portrait")
 
 def download(url: str, dest) -> str:
     dest = str(dest)
-    with requests.get(url, stream=True, timeout=120, headers=UA) as r:
-        r.raise_for_status()
-        with open(dest, "wb") as fh:
-            shutil.copyfileobj(r.raw, fh)
+
+    def _call():
+        with requests.get(url, stream=True, timeout=120, headers=UA) as r:
+            r.raise_for_status()
+            with open(dest + ".part", "wb") as fh:
+                shutil.copyfileobj(r.raw, fh)
+        return True
+
+    _retry(_call)
+    os.replace(dest + ".part", dest)
     return dest
 
 

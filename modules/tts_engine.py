@@ -37,10 +37,25 @@ def pick_voice(style_text: str) -> str:
 
 
 async def synth_scene(text: str, voice: str, rate: str, out_path: Path) -> Path:
+    """Synthesize one scene with retries (mobile networks drop mid-stream)."""
     import edge_tts
-    communicate = edge_tts.Communicate(text, voice, rate=rate)
-    await communicate.save(str(out_path))
-    return out_path
+    delays = [2, 5, 10]
+    last_exc = None
+    for attempt in range(1 + len(delays)):
+        try:
+            communicate = edge_tts.Communicate(text, voice, rate=rate)
+            await communicate.save(str(out_path))
+            if out_path.exists() and out_path.stat().st_size > 1024:
+                return out_path
+            raise RuntimeError("edge-tts wrote no/short audio")
+        except Exception as exc:  # noqa: BLE001
+            last_exc = exc
+            if attempt < len(delays):
+                wait = delays[attempt]
+                log.warning("tts attempt %d failed (%s); retrying in %ds",
+                            attempt + 1, type(exc).__name__, wait)
+                await asyncio.sleep(wait)
+    raise last_exc
 
 
 async def build_day_audio(day: str, payload: dict) -> dict:
@@ -59,6 +74,12 @@ async def build_day_audio(day: str, payload: dict) -> dict:
     for scene in payload["video_pipeline"]:
         sid = scene["scene_id"]
         mp3 = day_dir / f"scene_{sid}.mp3"
+        if mp3.exists() and mp3.stat().st_size > 1024:
+            # resume support: skip scenes already synthesized
+            probe = mutagen.File(str(mp3))
+            durations[sid] = probe.info.length
+            log.info("day=%s scene=%s cached (%.2fs)", day, sid, durations[sid])
+            continue
         await synth_scene(scene["narration_audio_text"], voice, rate, mp3)
         probe = mutagen.File(str(mp3))
         durations[sid] = probe.info.length

@@ -70,6 +70,13 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
 .hist div{padding:7px 2px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px}
 .hist a{color:var(--info);text-decoration:none}
 .empty{color:var(--mut);font-size:13.5px;text-align:center;padding:14px}
+.tabbtn{background:transparent;border:1px solid var(--line);color:var(--mut);border-radius:10px;padding:9px 14px}
+.tabbtn.active{background:var(--acc);border-color:var(--acc);color:#fff}
+.steps{counter-reset:st;margin:0 0 14px;padding:0;list-style:none}
+.steps li{counter-increment:st;padding:7px 0 7px 40px;position:relative;color:var(--txt);font-size:14px;border-bottom:1px solid var(--line)}
+.steps li:before{content:counter(st);position:absolute;left:0;top:7px;width:26px;height:26px;border-radius:50%;background:var(--card2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12.5px;color:var(--acc)}
+.steps code{background:var(--card2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12.5px;color:var(--acc)}
+.stlabel{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px;display:block;margin:12px 0 5px}
 @media(max-width:640px){.grid{grid-template-columns:1fr 1fr}.dcard h3{font-size:13px}.dbtns button{font-size:12.5px}}
 @media(max-width:420px){.grid{grid-template-columns:1fr}}
 </style>
@@ -78,12 +85,14 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
 <div class="wrap">
 <header>
   <h1><span class="dot"></span>Shorts <span>Console</span></h1>
-  <div class="row">
-    <button class="btn2 btn-sm" onclick="openNew()">+ New script</button>
+  <nav style="display:flex;gap:6px;flex-wrap:wrap">
+    <button class="tabbtn active" id="tab-dash" onclick="showTab('dash')">Dashboard</button>
+    <button class="tabbtn" id="tab-studio" onclick="showTab('studio')">AI Script Studio</button>
     <button class="btn2 btn-sm" onclick="loadState(true)">Refresh</button>
-  </div>
+  </nav>
 </header>
 
+<div id="view-dash">
 <div class="chips" id="chips"></div>
 
 <div class="card">
@@ -104,6 +113,55 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
   <div class="hist" id="hist"></div>
 </div>
 </div>
+</div><!-- /view-dash -->
+
+<div id="view-studio" style="display:none">
+<div class="card">
+  <h2>AI Script Studio — topic in, video script out</h2>
+  <ol class="steps">
+    <li>Enter your topic below and copy the auto-built prompt.</li>
+    <li>Paste it into <b>ChatGPT</b> (or any AI chat) and send it.</li>
+    <li>Copy its JSON reply back into the box in step 4.</li>
+    <li>Tap <b>Validate &amp; install</b>. The script appears on your Dashboard, ready to Build.</li>
+  </ol>
+
+  <label class="stlabel">Your video topic</label>
+  <input type="text" id="sTopic" placeholder="e.g. 5 dark psychology tricks advertisers use on you" oninput="buildPrompt()">
+
+  <label class="stlabel">Install as</label>
+  <select id="sDay" onchange="buildPrompt()">
+    <option value="">New custom script (custom_1, custom_2, …)</option>
+  </select>
+
+  <label class="stlabel">Step 2 — copy this prompt into ChatGPT</label>
+  <textarea id="sPrompt" readonly style="min-height:170px;font-size:12.5px"></textarea>
+  <div class="row" style="margin-top:8px">
+    <button onclick="copyPrompt()">Copy prompt</button>
+    <a class="btn2 btn-sm" style="text-decoration:none;padding:9px 14px;color:var(--txt);border-radius:10px;border:1px solid var(--line)" href="https://chat.openai.com/" target="_blank">Open ChatGPT ↗</a>
+    <span class="grow"></span>
+    <span id="sPromptMsg" style="font-size:12.5px;color:var(--mut)"></span>
+  </div>
+
+  <label class="stlabel">Step 4 — paste ChatGPT's JSON reply here</label>
+  <textarea id="sJson" placeholder="Paste the full JSON (or the whole message — extra text is removed automatically)" style="min-height:170px;font-size:12.5px"></textarea>
+  <div class="row" style="margin-top:10px">
+    <button class="btn-ok" onclick="doImport()">Validate &amp; install</button>
+    <span class="grow"></span>
+    <span id="sMsg" style="font-size:13px;color:var(--mut)"></span>
+  </div>
+</div>
+
+<div class="card">
+  <h2>Rules ChatGPT must follow (already in the prompt)</h2>
+  <p style="color:var(--mut);font-size:13.5px;line-height:1.7">
+    Hook ≤ 15 words • each scene 3.5–6.0s • total 40–62s • 100–135 narration words •
+    generic stock-footage search phrases (no brands) • title ≤ 100 chars with #Shorts •
+    exactly 3 hashtags • 5–7 tags.<br>
+    If ChatGPT breaks a rule, <b>Validate &amp; install</b> will refuse it and tell you exactly what to fix —
+    paste the error back into ChatGPT and say <i>"fix these issues"</i>.
+  </p>
+</div>
+</div><!-- /view-studio -->
 
 <div id="drawer"><div class="dwrap">
   <div class="row" style="justify-content:space-between;margin-bottom:8px">
@@ -216,7 +274,59 @@ async function pollDrawer(){
 }
 function watch(day){openDrawer(day)}
 
-/* ---------------- editor ---------------- */
+/* tab logic */
+function showTab(t){
+  document.body.dataset.tab=t;
+  $("#view-dash").style.display=t==="dash"?"":"none";
+  $("#view-studio").style.display=t==="studio"?"":"none";
+  $("#tab-dash").classList.toggle("active",t==="dash");
+  $("#tab-studio").classList.toggle("active",t==="studio");
+  if(t==="studio")fillDaySelect();
+}
+async function fillDaySelect(){
+  const sel=$("#sDay");
+  const cur=sel.value;
+  const r=await fetch("/api/state");const s=await r.json();
+  sel.innerHTML='<option value="">New custom script (custom_1, custom_2, …)</option>'+
+    (s.days||[]).map(d=>`<option value="${d.key}">Replace ${esc(d.key)} — ${esc((d.title||"").slice(0,44))}…</option>`).join("");
+  sel.value=cur;
+  buildPrompt();
+}
+async function copyPrompt(){
+  const ta=$("#sPrompt");
+  try{await navigator.clipboard.writeText(ta.value);toast("Prompt copied ✓")}
+  catch(e){ta.removeAttribute("readonly");ta.select();document.execCommand("copy");ta.setAttribute("readonly","");window.getSelection().removeAllRanges();toast("Prompt copied ✓")}
+}
+function buildPrompt(){
+  const topic=($("#sTopic").value||"your topic").trim();
+  const day=$("#sDay").value;
+  const p=[
+    "You are an autonomous AI content director for viral YouTube Shorts.",
+    "Create a complete video production script about: "+topic+".",
+    "",
+    "Return ONLY raw minified JSON (no markdown, no backticks, no explanations) with EXACTLY this structure:",
+    "{\"selected_niche\":\"...\",\"metadata\":{\"title\":\"under 100 chars, add #Shorts + 2 trending keywords\",\"description\":\"1-2 sentences with a comment CTA and exactly 3 hashtags\",\"tags\":[\"5-7 search keywords\"]},\"audio_profile\":{\"recommended_voice_style\":\"deep male authoritative with urgent cinematic undertone\",\"pace_multiplier\":1.15,\"bg_music_vibe\":\"dark cinematic tension strings over low synth drone\"},\"video_pipeline\":[",
+    "{\"scene_id\":1,\"narration_audio_text\":\"un-skippable psychological hook, max 15 words\",\"visual_generation_prompt\":\"generic stock footage search phrase for Pexels, no brands, 6-10 words\",\"duration_seconds\":4.5,\"on_screen_text_overlay\":\"CAPS text burned on screen\"}",
+    ", ... repeat for 8-10 scenes ...]},",
+    "",
+    "Hard rules:",
+    "- scene durations 3.5-6.0 seconds each; total 40-62 seconds",
+    "- total narration word count across ALL scenes: 100-135 words",
+    "- narration: punchy fragments, no compound sentences",
+    "- visual_generation_prompt: generic aesthetic keywords only (works on free stock sites), never names/brands",
+    "- title max 100 chars; description with exactly 3 hashtags",
+    "- 5-7 tags"
+  ].join("\n");
+  $("#sPrompt").value=p;
+}
+async function doImport(){
+  const body={text:$("#sJson").value};
+  if($("#sDay").value)body.replace=$("#sDay").value;
+  const r=await fetch("/api/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json();
+  if(j.ok){toast("Installed as "+j.key+" ✓");$("#sJson").value="";loadState();showTab('dash')}
+  else toast(j.error||"Import failed",true);
+}
 let ED=null;
 async function openEditor(key){
   CUR=key;
@@ -279,6 +389,7 @@ async function openNew(){
   if(j.error){toast(j.error,true);return}
   ED=j.payload;ED._key=j.key;renderEditor(j.key);loadState();
 }
+setInterval(()=>{if(document.visibilityState==="visible"&&!curDrawer)loadState()},3000);
 function closeModal(){$("#modal").classList.remove("open");$("#mMsg").textContent=""}
 
 async function saveSchedule(){
@@ -290,7 +401,7 @@ async function saveSchedule(){
 }
 
 loadState();
-setInterval(()=>{if(document.visibilityState==="visible"&&!curDrawer)loadState()},3000);
+showTab('dash');
 </script>
 </body>
 </html>

@@ -335,6 +335,47 @@ def api_delete_day(day):
     return jsonify({"ok": True})
 
 
+def extract_json(text: str) -> dict:
+    """Pull the first JSON object out of raw ChatGPT output (tolerant of
+    markdown fences, chatter, multiple blocks)."""
+    text = (text or "").strip()
+    if "```" in text:  # prefer fenced block that contains an object
+        for part in text.split("```"):
+            if "{" in part:
+                text = part
+                break
+    start, end = text.find("{"), text.rfind("}")
+    if start == -1 or end <= start:
+        raise ValueError("no JSON object found in the pasted text")
+    return json.loads(text[start:end + 1])
+
+
+@app.post("/api/import")
+def api_import():
+    """Save a pasted ChatGPT script. Body: {text, replace(optional day key)}."""
+    body = request.get_json(force=True, silent=True) or {}
+    try:
+        data = extract_json(body.get("text", ""))
+        validate_payload(data, "pasted script")
+    except ValueError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"could not parse JSON: {exc}"}), 400
+
+    replace = safe_key(body.get("replace") or "")
+    if replace:
+        if replace in running_days():
+            return jsonify({"error": "that day is building right now"}), 409
+        key = replace
+    else:
+        n = 1
+        while (CONTENT_DIR / f"custom_{n}.json").exists():
+            n += 1
+        key = f"custom_{n}"
+    (CONTENT_DIR / f"{key}.json").write_text(json.dumps(data, indent=1))
+    return jsonify({"ok": True, "key": key})
+
+
 @app.post("/api/day/<day>")
 def api_save_day(day):
     day = safe_key(day)

@@ -24,8 +24,8 @@ from pathlib import Path
 from flask import Flask, jsonify, request, send_from_directory
 from flask import send_file
 
-from common import (BASE_DIR, CONTENT_DIR, VIDEO_DIR, day_from_date, load_env,
-                    load_payload, validate_payload)
+from common import (BASE_DIR, CONTENT_DIR, ENV_FILE, VIDEO_DIR, day_from_date,
+                    load_env, load_payload, validate_payload)
 
 load_env()
 
@@ -45,7 +45,8 @@ _lock = threading.RLock()
 def default_state():
     return {"jobs": {}, "schedule": {"enabled": False, "time": "17:00",
                                      "last_run_date": "", "next_run": ""},
-            "history": []}
+            "history": [],
+            "ai_job": {"running": False, "topic": "", "progress": []}}
 
 
 def load_state():
@@ -55,6 +56,13 @@ def load_state():
             st.update(json.loads(STATE_FILE.read_text()))
         except Exception:
             pass
+    st.setdefault("ai_job", {"running": False, "topic": "", "progress": []})
+    if st["ai_job"].get("running"):   # a dead process can't finish it
+        st["ai_job"]["running"] = False
+        for entry in st["ai_job"].get("progress", []):
+            if entry.get("status") == "pending":
+                entry["status"] = "error"
+                entry["error"] = "server restarted"
     # jobs from a previous process can't be running anymore
     for job in st["jobs"].values():
         if job.get("status") in ("queued", "building"):
@@ -73,6 +81,41 @@ def save_state():
             job.pop("_proc", None)
         STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
         STATE_FILE.write_text(json.dumps(clean, indent=1))
+
+
+def set_env_key(key: str, value: str):
+    """Create/update a key in config/.env (file format: KEY="value")."""
+    import re
+    line = f'{key}="{value}"'
+    text = ENV_FILE.read_text() if ENV_FILE.exists() else ""
+    if re.search(rf"(?m)^{re.escape(key)}=", text):
+        text = re.sub(rf"(?m)^{re.escape(key)}=.*$", line, text)
+    else:
+        text = text.rstrip("\n") + ("\n" if text else "") + line + "\n"
+    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ENV_FILE.write_text(text)
+    os.environ[key] = value
+
+
+@app.post("/api/settings")
+def api_settings():
+    body = request.get_json(force=True, silent=True) or {}
+    key = str(body.get("key", "")).strip()
+    value = str(body.get("value", "")).strip()
+    if key not in ("OPENAI_API_KEY",):
+        return jsonify({"error": "unknown setting"}), 400
+    if not value:
+        return jsonify({"error": "value required"}), 400
+    set_env_key(key, value)
+    return jsonify({"ok": True})
+
+
+@app.get("/api/settings")
+def api_settings_get():
+    k = os.environ.get("OPENAI_API_KEY", "")
+    has = bool(k.strip()) and "REPLACE" not in k
+    return jsonify({"openai_configured": has,
+                    "masked": (k[:7] + "…" + k[-4:]) if has else ""})
 
 
 def day_keys():
@@ -296,6 +339,7 @@ def api_state():
         days = [_day_info(k) for k in day_keys()]
         return jsonify({"days": days, "schedule": state["schedule"],
                         "history": state["history"][:10],
+                        "ai_job": state["ai_job"],
                         "jobs": {k: {kk: vv for kk, vv in j.items()
                                      if kk != "_proc"}
                                  for k, j in state["jobs"].items()},
@@ -348,6 +392,139 @@ def extract_json(text: str) -> dict:
     if start == -1 or end <= start:
         raise ValueError("no JSON object found in the pasted text")
     return json.loads(text[start:end + 1])
+
+
+# ------------------------------------------------------- AI generation ---
+def build_week_prompt(topic: str) -> str:
+    return (
+        "You are an autonomous AI content director for viral YouTube Shorts in "
+        "the dark psychology / mind facts niche.\n\n"
+        f"Create a complete video production script about: {topic}\n\n"
+        "Return ONLY raw minified JSON (no markdown fences, no explanations) "
+        "with EXACTLY this structure:\n"
+        '{"selected_niche":"...","metadata":{"title":"under 100 chars, add '
+        '#Shorts + 2 trending keywords","description":"1-2 sentences with a '
+        'comment CTA and exactly 3 hashtags","tags":["5-7 search keywords"]},'
+        '"audio_profile":{"recommended_voice_style":"deep male authoritative '
+        'with urgent cinematic undertone","pace_multiplier":1.15,'
+        '"bg_music_vibe":"dark cinematic tension strings over low synth '
+        'drone"},"video_pipeline":[{"scene_id":1,"narration_audio_text":'
+        '"un-skippable psychological hook, max 15 words",'
+        '"visual_generation_prompt":"generic stock footage search phrase for '
+        'Pexels, no brands, 6-10 words","duration_seconds":4.5,'
+        '"on_screen_text_overlay":"CAPS text burned on screen"}, ... 8-10 '
+        'scenes ...]}\n\n'
+        "Hard rules:\n"
+        "- scene 1 hook stops the scroll in under 3 seconds\n"
+        "- each scene duration 3.5-6.0 seconds; total 40-62 seconds\n"
+        "- total narration word count across ALL scenes: 100-135 words\n"
+        "- narration: punchy fragments, no compound sentences\n"
+        "- last scene asks for a comment + follow\n"
+        "- visual_generation_prompt: generic aesthetic keywords only, no names "
+        "or brands\n"
+        "- title max 100 chars; exactly 3 hashtags in description; 5-7 tags"
+    )
+
+
+def _ai_generate_script(topic: str) -> dict:
+    """Call an OpenAI-compatible chat API with plain requests (no SDK needed
+    on Termux). Point OPENAI_BASE_URL at a local LLM to use free models."""
+    import requests
+
+    def _call():
+        r = requests.post(
+            os.environ.get("OPENAI_BASE_URL",
+                           "https://api.openai.com/v1").rstrip("/") + "/chat/completions",
+            headers={"Authorization":
+                     "Bearer " + os.environ.get("OPENAI_API_KEY", "").strip(),
+                     "Content-Type": "application/json"},
+            json={"model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
+                  "temperature": 0.9,
+                  "messages": [{"role": "user",
+                                "content": build_week_prompt(topic)}]},
+            timeout=180)
+        r.raise_for_status()
+        return r
+
+    last = None
+    for attempt in range(3):
+        try:
+            resp = _call()
+            break
+        except Exception as exc:  # noqa: BLE001
+            last = exc
+            time.sleep(3 * (attempt + 1))
+    else:
+        raise ValueError(f"AI service unreachable: {last}")
+    raw = (resp.json().get("choices") or [{}])[0].get("message", {}) \
+        .get("content") or ""
+    if resp.status_code != 200:
+        raise ValueError(f"AI API error {resp.status_code}")
+    try:
+        data = extract_json(raw)
+        validate_payload(data, f"AI script ({topic})")
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"AI returned an invalid script: {exc}") from exc
+    return data
+
+
+def _ai_worker(topic: str, days: list):
+    try:
+        for i, day in enumerate(days, 1):
+            ai = state["ai_job"]
+            ai["current"] = f"{i}/{len(days)}: {day}"
+            entry = next((e for e in ai["progress"] if e["day"] == day), None)
+            try:
+                variant = topic if len(days) == 1 else f"{topic} (part {i})"
+                data = _ai_generate_script(variant)
+                (CONTENT_DIR / f"{day}.json").write_text(json.dumps(data, indent=1))
+                if entry:
+                    entry["status"] = "done"
+                    entry["title"] = data.get("metadata", {}).get("title", "")
+            except Exception as exc:  # noqa: BLE001
+                if entry:
+                    entry["status"] = "error"
+                    entry["error"] = str(exc)[:200]
+        ai["running"] = False
+        ai["current"] = ""
+    finally:
+        save_state()
+
+
+def start_ai_job(topic: str, days: list):
+    with _lock:
+        if state["ai_job"].get("running"):
+            return False, "another AI generation is running"
+        busy = [d for d in days if d in running_days()]
+        if busy:
+            return False, f"these days are building right now: {', '.join(busy)}"
+        state["ai_job"] = {
+            "running": True, "topic": topic, "current": "",
+            "progress": [{"day": d, "status": "pending"} for d in days],
+        }
+        save_state()
+    threading.Thread(target=_ai_worker, args=(topic, days), daemon=True).start()
+    return True, "started"
+
+
+@app.post("/api/ai-generate")
+def api_ai_generate():
+    body = request.get_json(force=True, silent=True) or {}
+    topic = str(body.get("topic", "")).strip()[:120]
+    if not topic:
+        return jsonify({"error": "topic required"}), 400
+    days = body.get("days") or []
+    if not isinstance(days, list):
+        return jsonify({"error": "days must be a list"}), 400
+    days = [d for d in (safe_key(x) for x in days) if d]
+    if not days:
+        return jsonify({"error": "pick at least one day"}), 400
+    if not (os.environ.get("OPENAI_API_KEY") or "").strip() \
+            or "REPLACE" in os.environ.get("OPENAI_API_KEY", ""):
+        return jsonify({"error": "add OPENAI_API_KEY to config/.env first "
+                                 "(console Settings tab)"}), 400
+    ok, msg = start_ai_job(topic, days)
+    return (jsonify({"ok": ok, "msg": msg}), 200 if ok else 409)
 
 
 @app.post("/api/import")

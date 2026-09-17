@@ -77,6 +77,15 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
 .steps li:before{content:counter(st);position:absolute;left:0;top:7px;width:26px;height:26px;border-radius:50%;background:var(--card2);border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-weight:800;font-size:12.5px;color:var(--acc)}
 .steps code{background:var(--card2);border:1px solid var(--line);border-radius:6px;padding:1px 7px;font-size:12.5px;color:var(--acc)}
 .stlabel{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.8px;display:block;margin:12px 0 5px}
+.daypills{display:flex;gap:8px;flex-wrap:wrap}
+.pill{border:1px solid var(--line);background:var(--card2);color:var(--mut);border-radius:20px;padding:8px 14px;font:inherit;font-size:13.5px;font-weight:600;cursor:pointer}
+.pill.on{background:var(--acc);border-color:var(--acc);color:#fff}
+.prog{display:flex;align-items:center;gap:8px;padding:6px 0;font-size:13.5px;border-bottom:1px solid var(--line)}
+.prog .st{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.5px;padding:2px 8px;border-radius:12px;background:var(--card2);color:var(--mut)}
+.prog .st.pending{color:var(--warn);background:#332a10}
+.prog .st.done{color:var(--ok);background:#123527}
+.prog .st.error{color:var(--err);background:#3a1418}
+.prog .errtxt{color:var(--err);font-size:12px}
 @media(max-width:640px){.grid{grid-template-columns:1fr 1fr}.dcard h3{font-size:13px}.dbtns button{font-size:12.5px}}
 @media(max-width:420px){.grid{grid-template-columns:1fr}}
 </style>
@@ -87,7 +96,8 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
   <h1><span class="dot"></span>Shorts <span>Console</span></h1>
   <nav style="display:flex;gap:6px;flex-wrap:wrap">
     <button class="tabbtn active" id="tab-dash" onclick="showTab('dash')">Dashboard</button>
-    <button class="tabbtn" id="tab-studio" onclick="showTab('studio')">AI Script Studio</button>
+    <button class="tabbtn" id="tab-studio" onclick="showTab('studio')">✨ AI Studio</button>
+    <button class="tabbtn" id="tab-set" onclick="showTab('set')">⚙ Settings</button>
     <button class="btn2 btn-sm" onclick="loadState(true)">Refresh</button>
   </nav>
 </header>
@@ -117,51 +127,45 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
 
 <div id="view-studio" style="display:none">
 <div class="card">
-  <h2>AI Script Studio — topic in, video script out</h2>
-  <ol class="steps">
-    <li>Enter your topic below and copy the auto-built prompt.</li>
-    <li>Paste it into <b>ChatGPT</b> (or any AI chat) and send it.</li>
-    <li>Copy its JSON reply back into the box in step 4.</li>
-    <li>Tap <b>Validate &amp; install</b>. The script appears on your Dashboard, ready to Build.</li>
-  </ol>
+  <h2>✨ AI Studio — topic in, videos out</h2>
+  <p style="color:var(--mut);font-size:13px;margin-bottom:12px">Type a topic, pick the days, tap Generate. The AI writes each day's script automatically — no copy-paste, no validation steps. Scripts land on the Dashboard as they're created.</p>
 
-  <label class="stlabel">Your video topic</label>
-  <input type="text" id="sTopic" placeholder="e.g. 5 dark psychology tricks advertisers use on you" oninput="buildPrompt()">
+  <label class="stlabel">Video topic</label>
+  <input type="text" id="sTopic" placeholder="e.g. signs someone is secretly lying to you">
 
-  <label class="stlabel">Install as</label>
-  <select id="sDay" onchange="buildPrompt()">
-    <option value="">New custom script (custom_1, custom_2, …)</option>
-  </select>
+  <label class="stlabel">Generate for</label>
+  <div class="daypills" id="dayPills"></div>
 
-  <label class="stlabel">Step 2 — copy this prompt into ChatGPT</label>
-  <textarea id="sPrompt" readonly style="min-height:170px;font-size:12.5px"></textarea>
-  <div class="row" style="margin-top:8px">
-    <button onclick="copyPrompt()">Copy prompt</button>
-    <a class="btn2 btn-sm" style="text-decoration:none;padding:9px 14px;color:var(--txt);border-radius:10px;border:1px solid var(--line)" href="https://chat.openai.com/" target="_blank">Open ChatGPT ↗</a>
-    <span class="grow"></span>
-    <span id="sPromptMsg" style="font-size:12.5px;color:var(--mut)"></span>
-  </div>
-
-  <label class="stlabel">Step 4 — paste ChatGPT's JSON reply here</label>
-  <textarea id="sJson" placeholder="Paste the full JSON (or the whole message — extra text is removed automatically)" style="min-height:170px;font-size:12.5px"></textarea>
-  <div class="row" style="margin-top:10px">
-    <button class="btn-ok" onclick="doImport()">Validate &amp; install</button>
+  <div class="row" style="margin-top:14px">
+    <button id="sGo" onclick="aiGenerate()">✨ Generate scripts</button>
     <span class="grow"></span>
     <span id="sMsg" style="font-size:13px;color:var(--mut)"></span>
   </div>
+  <div id="aiProgress" style="margin-top:10px;display:none"></div>
 </div>
 
 <div class="card">
-  <h2>Rules ChatGPT must follow (already in the prompt)</h2>
+  <h2>How it works</h2>
   <p style="color:var(--mut);font-size:13.5px;line-height:1.7">
-    Hook ≤ 15 words • each scene 3.5–6.0s • total 40–62s • 100–135 narration words •
-    generic stock-footage search phrases (no brands) • title ≤ 100 chars with #Shorts •
-    exactly 3 hashtags • 5–7 tags.<br>
-    If ChatGPT breaks a rule, <b>Validate &amp; install</b> will refuse it and tell you exactly what to fix —
-    paste the error back into ChatGPT and say <i>"fix these issues"</i>.
+    Each script the AI writes is auto-checked: hook ≤ 15 words • scenes 3.5–6.0s • total 40–62s •
+    100–135 narration words • generic stock-footage phrases • #Shorts title. If the AI breaks a rule
+    the day is marked <span style="color:var(--err)">error</span> with the reason — just tap Generate again for that day.
   </p>
 </div>
 </div><!-- /view-studio -->
+
+<div id="view-set" style="display:none">
+<div class="card">
+  <h2>⚙ Settings</h2>
+  <label class="stlabel">OpenAI API key (for the AI Studio)</label>
+  <div class="row">
+    <input type="password" id="setKey" placeholder="sk-..." style="flex:1;min-width:200px">
+    <button onclick="saveKey()">Save</button>
+  </div>
+  <p id="setStatus" style="font-size:13px;color:var(--mut);margin-top:8px"></p>
+  <p style="color:var(--mut);font-size:12.5px;margin-top:10px">Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" style="color:var(--info)">platform.openai.com/api-keys</a> → Create new secret key. Costs ~$0.01 per week of scripts. Stored only in <code>config/.env</code> on your device (never uploaded to GitHub — it's gitignored).</p>
+</div>
+</div><!-- /view-set -->
 
 <div id="drawer"><div class="dwrap">
   <div class="row" style="justify-content:space-between;margin-bottom:8px">
@@ -275,57 +279,58 @@ async function pollDrawer(){
 function watch(day){openDrawer(day)}
 
 /* tab logic */
+const DAYNAMES={monday:"Mon",tuesday:"Tue",wednesday:"Wed",thursday:"Thu",friday:"Fri",saturday:"Sat",sunday:"Sun"};
 function showTab(t){
   document.body.dataset.tab=t;
-  $("#view-dash").style.display=t==="dash"?"":"none";
-  $("#view-studio").style.display=t==="studio"?"":"none";
-  $("#tab-dash").classList.toggle("active",t==="dash");
-  $("#tab-studio").classList.toggle("active",t==="studio");
-  if(t==="studio")fillDaySelect();
+  ["dash","studio","set"].forEach(v=>$("#view-"+v).style.display=(t===v)?"":"none");
+  ["dash","studio","set"].forEach(v=>$("#tab-"+(v==="studio"?"studio":v)).classList.toggle("active",t===v));
+  if(t==="studio"){renderPills();pollAI()}
+  if(t==="set")loadSettings();
 }
-async function fillDaySelect(){
-  const sel=$("#sDay");
-  const cur=sel.value;
-  const r=await fetch("/api/state");const s=await r.json();
-  sel.innerHTML='<option value="">New custom script (custom_1, custom_2, …)</option>'+
-    (s.days||[]).map(d=>`<option value="${d.key}">Replace ${esc(d.key)} — ${esc((d.title||"").slice(0,44))}…</option>`).join("");
-  sel.value=cur;
-  buildPrompt();
+function renderPills(){
+  const el=$("#dayPills");
+  if(el.dataset.init)return;
+  el.innerHTML=Object.keys(DAYNAMES).map(d=>`<button class="pill" data-day="${d}">${DAYNAMES[d]}</button>`).join("");
+  el.addEventListener("click",e=>{const b=e.target.closest(".pill");if(b)b.classList.toggle("on")});
+  el.dataset.init=1;
 }
-async function copyPrompt(){
-  const ta=$("#sPrompt");
-  try{await navigator.clipboard.writeText(ta.value);toast("Prompt copied ✓")}
-  catch(e){ta.removeAttribute("readonly");ta.select();document.execCommand("copy");ta.setAttribute("readonly","");window.getSelection().removeAllRanges();toast("Prompt copied ✓")}
-}
-function buildPrompt(){
-  const topic=($("#sTopic").value||"your topic").trim();
-  const day=$("#sDay").value;
-  const p=[
-    "You are an autonomous AI content director for viral YouTube Shorts.",
-    "Create a complete video production script about: "+topic+".",
-    "",
-    "Return ONLY raw minified JSON (no markdown, no backticks, no explanations) with EXACTLY this structure:",
-    "{\"selected_niche\":\"...\",\"metadata\":{\"title\":\"under 100 chars, add #Shorts + 2 trending keywords\",\"description\":\"1-2 sentences with a comment CTA and exactly 3 hashtags\",\"tags\":[\"5-7 search keywords\"]},\"audio_profile\":{\"recommended_voice_style\":\"deep male authoritative with urgent cinematic undertone\",\"pace_multiplier\":1.15,\"bg_music_vibe\":\"dark cinematic tension strings over low synth drone\"},\"video_pipeline\":[",
-    "{\"scene_id\":1,\"narration_audio_text\":\"un-skippable psychological hook, max 15 words\",\"visual_generation_prompt\":\"generic stock footage search phrase for Pexels, no brands, 6-10 words\",\"duration_seconds\":4.5,\"on_screen_text_overlay\":\"CAPS text burned on screen\"}",
-    ", ... repeat for 8-10 scenes ...]},",
-    "",
-    "Hard rules:",
-    "- scene durations 3.5-6.0 seconds each; total 40-62 seconds",
-    "- total narration word count across ALL scenes: 100-135 words",
-    "- narration: punchy fragments, no compound sentences",
-    "- visual_generation_prompt: generic aesthetic keywords only (works on free stock sites), never names/brands",
-    "- title max 100 chars; description with exactly 3 hashtags",
-    "- 5-7 tags"
-  ].join("\n");
-  $("#sPrompt").value=p;
-}
-async function doImport(){
-  const body={text:$("#sJson").value};
-  if($("#sDay").value)body.replace=$("#sDay").value;
-  const r=await fetch("/api/import",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+function selDays(){return [...document.querySelectorAll("#dayPills .pill.on")].map(b=>b.dataset.day)}
+async function aiGenerate(){
+  const topic=$("#sTopic").value.trim();
+  const days=selDays();
+  if(!topic){toast("Enter a topic first",true);return}
+  if(!days.length){toast("Pick at least one day",true);return}
+  const r=await fetch("/api/ai-generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic,days})});
   const j=await r.json();
-  if(j.ok){toast("Installed as "+j.key+" ✓");$("#sJson").value="";loadState();showTab('dash')}
-  else toast(j.error||"Import failed",true);
+  if(!j.ok){toast(j.msg||j.error||"Failed",true);return}
+  toast("Generating "+days.length+" script(s)…");
+  $("#aiProgress").style.display="block";
+  pollAI();
+}
+let aiTimer=null;
+async function pollAI(){
+  const r=await fetch("/api/state");const s=await r.json();
+  const ai=s.ai_job||{running:false,progress:[]};
+  const box=$("#aiProgress");
+  if(!ai.progress||!ai.progress.length){box.style.display="none";return}
+  box.style.display="block";
+  box.innerHTML=`<div style="font-size:12.5px;color:var(--mut);margin-bottom:4px">Topic: <b style="color:var(--txt)">${esc(ai.topic||"")}</b>${ai.running&&ai.current?` — ${esc(ai.current)}`:""}${ai.running?' <span class="st pending">working…</span>':""}</div>`+
+    ai.progress.map(p=>`<div class="prog"><span class="st ${p.status}">${p.status}</span><span>${DAYNAMES[p.day.replace(/^day\\d+_/,"")]||p.day}</span>${p.title?`<span style="color:var(--mut);font-size:12.5px">${esc(p.title).slice(0,40)}…</span>`:""}${p.error?`<span class="errtxt">${esc(p.error).slice(0,80)}</span>`:""}</div>`).join("")+
+    (!ai.running?`<div style="margin-top:8px;font-size:13px">${ai.progress.every(p=>p.status==="done")?'✅ All scripts ready — check the <a href="#" onclick="showTab(\'dash\');return false" style="color:var(--info)">Dashboard</a> and hit Build.':'Some days failed — fix the error above or tap Generate again.'}</div>`:"");
+  clearTimeout(aiTimer);
+  if(ai.running)aiTimer=setTimeout(pollAI,2500);
+}
+async function loadSettings(){
+  const r=await fetch("/api/settings");const j=await r.json();
+  $("#setStatus").innerHTML=j.openai_configured?`✅ OpenAI key configured (${esc(j.masked)})`:'⚠ No OpenAI key yet — the AI Studio needs one. Paste it above and tap Save.';
+}
+async function saveKey(){
+  const v=$("#setKey").value.trim();
+  if(!v){toast("Paste the key first",true);return}
+  const r=await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:"OPENAI_API_KEY",value:v})});
+  const j=await r.json();
+  if(j.ok){toast("Key saved ✓");$("#setKey").value="";loadSettings()}
+  else toast(j.error||"Save failed",true);
 }
 let ED=null;
 async function openEditor(key){
@@ -402,6 +407,7 @@ async function saveSchedule(){
 
 loadState();
 showTab('dash');
+pollAI();
 </script>
 </body>
 </html>

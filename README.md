@@ -13,6 +13,14 @@ bash start_here.sh        # installs everything, asks for keys, runs doctor
 Then:
 
 ```bash
+python3 modules/webapp.py   # WEB CONSOLE -> open http://localhost:5000
+```
+
+The console is the main control panel: build & upload any video with one tap, watch progress live, preview videos in the browser (no more file-copying to your gallery), edit scripts with validation, and toggle the daily auto-pilot schedule.
+
+CLI commands (also work):
+
+```bash
 DRY_RUN=true python3 modules/daily.py day1_monday   # test render, no upload
 python3 modules/upload.py output/videos/day1_monday_final.mp4 day1_monday  # go live
 ```
@@ -36,6 +44,7 @@ nohup python3 modules/scheduler.py > logs/scheduler.log 2>&1 &
 | `DRY_RUN=true python3 modules/daily.py <day>` | build video, skip upload |
 | `python3 modules/daily.py <day>` | build + upload now |
 | `bash scripts/one_click_week.sh` | render all 7 videos locally |
+| `python3 modules/webapp.py` | **web console: build / upload / schedule / edit / watch** |
 | `python3 modules/upload.py <mp4> <day>` | upload an existing render |
 
 ## Money reality (read this)

@@ -211,13 +211,18 @@ That's it. From now on, each day at 17:00 the machine renders and posts that day
 
 > If your server is UTC but you want Indian evening uploads, set `TIMEZONE="Asia/Kolkata"` in `config/.env` — `run_daily.sh` uses it to pick the correct weekday content.
 
-### Option B — always-on Python loop (Windows/Android/anywhere)
+### Option B — the Web Console auto-pilot (easiest, works everywhere incl. Termux)
+
+Start the console and leave it running:
 
 ```bash
-nohup python3 modules/scheduler.py > logs/scheduler.log 2>&1 &
+nohup python3 modules/webapp.py > logs/console.log 2>&1 &
+termux-wake-lock   # Android only: stops Android killing it
 ```
 
-It sleeps until `UPLOAD_HHMM`, runs the daily pipeline, then sleeps until the next day. Survives reboots only if you add it to startup (cron `@reboot` or Termux `~/.bashrc`).
+Open **http://localhost:5000** (or the second http:// address it prints — that works from any device on the same Wi-Fi). In the **Daily auto-pilot** card: set your time, toggle **ON**, tap **Save schedule**. Done — the running console builds and uploads that day's video every day at that time, and you watch each job's progress live.
+
+It survives reboots only if added to startup (cron `@reboot`, or Termux: append the nohup line to `~/.bashrc`).
 
 ### Option C — GitHub Actions (free cloud computer, no machine of yours running)
 

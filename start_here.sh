@@ -45,6 +45,15 @@ python3 -m pip install -q -r requirements.txt || \
 python3 -m pip install -q --break-system-packages -r requirements.txt
 echo "packages ready."
 
+# ---- 2b. start the web console -------------------------------
+echo ""
+echo "[2b/5] Starting the web console (your control panel)..."
+nohup python3 modules/webapp.py > logs/console.log 2>&1 &
+sleep 1
+if command -v termux-wake-lock >/dev/null; then termux-wake-lock 2>/dev/null || true; fi
+echo "  Console running ->  http://localhost:5000"
+echo "  (open that in your browser; it keeps running in the background)"
+
 # ---- 3. config/.env ----------------------------------------
 echo ""
 echo "[3/5] Setting up config/.env..."

@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Shorts Console</title>
+<style>
+:root{--bg:#0b0f17;--card:#141a26;--card2:#1b2333;--line:#232d42;--txt:#e8edf7;--mut:#8b96ad;--acc:#7c5cff;--ok:#2ecc71;--warn:#f1c40f;--err:#ff5c6c;--info:#4aa8ff}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--txt);font:15px/1.45 -apple-system,'Segoe UI',Roboto,sans-serif;min-height:100vh}
+.wrap{max-width:1080px;margin:0 auto;padding:16px 14px 80px}
+header{display:flex;justify-content:space-between;align-items:center;gap:10px;padding:4px 2px 14px;flex-wrap:wrap}
+h1{font-size:20px;font-weight:800;letter-spacing:.3px}
+h1 span{color:var(--acc)}
+.dot{display:inline-block;width:9px;height:9px;border-radius:50%;background:var(--ok);margin-right:6px;animation:pulse 2s infinite}
+@keyframes pulse{50%{opacity:.4}}
+.chips{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:14px}
+.chip{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.chip b{display:block;font-size:22px;margin-top:2px}
+.chip small{color:var(--mut);font-size:11.5px;text-transform:uppercase;letter-spacing:.8px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:16px;margin-bottom:14px}
+.card h2{font-size:15px;margin-bottom:12px;color:var(--mut);font-weight:700;text-transform:uppercase;letter-spacing:1px}
+.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.grow{flex:1;min-width:150px}
+input[type=time],input[type=text],textarea,select{background:var(--card2);border:1px solid var(--line);border-radius:10px;color:var(--txt);padding:10px 12px;font:inherit;width:100%}
+textarea{resize:vertical}
+button{border:0;border-radius:10px;padding:10px 16px;font:inherit;font-weight:700;cursor:pointer;color:#fff;background:var(--acc);transition:filter .15s}
+button:hover{filter:brightness(1.12)}
+button:disabled{opacity:.45;cursor:not-allowed}
+.btn2{background:var(--card2);border:1px solid var(--line)}
+.btn-ok{background:var(--ok);color:#06281a}
+.btn-err{background:var(--err)}
+.btn-sm{padding:7px 12px;font-size:13px}
+.switch{position:relative;width:52px;height:28px;flex:none}
+.switch input{opacity:0;width:0;height:0}
+.sl{position:absolute;inset:0;background:var(--card2);border:1px solid var(--line);border-radius:28px;transition:.2s}
+.sl:before{content:"";position:absolute;width:20px;height:20px;border-radius:50%;background:var(--mut);top:3px;left:4px;transition:.2s}
+.switch input:checked+.sl{background:var(--acc);border-color:var(--acc)}
+.switch input:checked+.sl:before{transform:translateX(23px);background:#fff}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.dcard{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:14px;display:flex;flex-direction:column;gap:9px}
+.dcard h3{font-size:14.5px;font-weight:700;line-height:1.3;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:38px}
+.meta{color:var(--mut);font-size:12.5px;display:flex;gap:10px;flex-wrap:wrap}
+.badge{align-self:flex-start;font-size:11px;font-weight:800;letter-spacing:.6px;text-transform:uppercase;padding:3px 9px;border-radius:20px;background:var(--card2);color:var(--mut)}
+.b-idle{color:var(--mut)}.b-done{background:#123527;color:var(--ok)}.b-up{background:#0f2c44;color:var(--info)}.b-run{background:#332a10;color:var(--warn);animation:pulse 1.5s infinite}.b-err{background:#3a1418;color:var(--err)}
+.b-build{background:#332a10;color:var(--warn)}
+.dbtns{display:flex;gap:8px;margin-top:auto}
+.dbtns button{flex:1;font-size:13.5px;padding:9px 6px}
+video{width:100%;max-height:62vh;border-radius:12px;background:#000}
+#drawer{position:fixed;inset:0;background:rgba(5,8,14,.72);display:none;z-index:40;padding:18px;overflow:auto}
+#drawer.open{display:block}
+.dwrap{max-width:680px;margin:4vh auto;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px}
+.dwrap h2{font-size:17px;margin-bottom:10px}
+pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:12px;font:12.3px/1.55 ui-monospace,Menlo,monospace;max-height:46vh;overflow:auto;white-space:pre-wrap;word-break:break-word;color:#a9d5a9}
+.errline{color:var(--err)}
+.modal{position:fixed;inset:0;background:rgba(5,8,14,.72);display:none;z-index:50;padding:14px;overflow:auto}
+.modal.open{display:block}
+.mwrap{max-width:760px;margin:3vh auto;background:var(--card);border:1px solid var(--line);border-radius:18px;padding:18px}
+.scene{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:12px;margin-bottom:10px}
+.scene .sh{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+.scene label{font-size:11.5px;color:var(--mut);text-transform:uppercase;letter-spacing:.7px;display:block;margin:8px 0 4px}
+.scene input,.scene textarea{font-size:14px}
+.scene textarea{min-height:52px}
+.two{display:flex;gap:10px}
+.two>div{flex:1}
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%);background:#232d42;border:1px solid var(--line);padding:11px 20px;border-radius:12px;font-weight:600;opacity:0;pointer-events:none;transition:.3s;z-index:99;max-width:92vw}
+#toast.show{opacity:1}
+#toast.err{border-color:var(--err);color:var(--err)}
+.hist{font-size:13.5px}
+.hist div{padding:7px 2px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;gap:10px}
+.hist a{color:var(--info);text-decoration:none}
+.empty{color:var(--mut);font-size:13.5px;text-align:center;padding:14px}
+@media(max-width:640px){.grid{grid-template-columns:1fr 1fr}.dcard h3{font-size:13px}.dbtns button{font-size:12.5px}}
+@media(max-width:420px){.grid{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header>
+  <h1><span class="dot"></span>Shorts <span>Console</span></h1>
+  <div class="row">
+    <button class="btn2 btn-sm" onclick="openNew()">+ New script</button>
+    <button class="btn2 btn-sm" onclick="loadState(true)">Refresh</button>
+  </div>
+</header>
+
+<div class="chips" id="chips"></div>
+
+<div class="card">
+  <h2>Daily auto-pilot</h2>
+  <div class="row">
+    <label class="switch"><input type="checkbox" id="schOn"><span class="sl"></span></label>
+    <input type="time" id="schTime" style="max-width:130px">
+    <button class="btn-sm" onclick="saveSchedule()">Save schedule</button>
+    <div class="grow" style="color:var(--mut);font-size:13.5px" id="schInfo"></div>
+  </div>
+  <p style="color:var(--mut);font-size:12.5px;margin-top:10px">When enabled, this running server auto-builds + uploads the matching day's script once per day at the set time. Keep Termux alive: <code>termux-wake-lock</code>.</p>
+</div>
+
+<div class="grid" id="days"></div>
+
+<div class="card" id="histCard" style="display:none">
+  <h2>Upload history</h2>
+  <div class="hist" id="hist"></div>
+</div>
+</div>
+
+<div id="drawer"><div class="dwrap">
+  <div class="row" style="justify-content:space-between;margin-bottom:8px">
+    <h2 id="dTitle">Job</h2>
+    <button class="btn2 btn-sm" onclick="closeDrawer()">Close</button>
+  </div>
+  <div id="dStatus" class="meta" style="margin-bottom:10px"></div>
+  <video id="dVideo" controls style="display:none;margin-bottom:10px"></video>
+  <pre id="dLog"></pre>
+  <div class="row" style="margin-top:10px">
+    <button class="btn-err btn-sm" id="dStop" onclick="stopJob()">Stop job</button>
+    <span class="grow"></span>
+    <label style="font-size:12.5px;color:var(--mut)"><input type="checkbox" id="dFollow" checked> auto-scroll</label>
+  </div>
+</div></div>
+
+<div class="modal" id="modal"><div class="mwrap">
+  <div class="row" style="justify-content:space-between;margin-bottom:8px">
+    <h2 id="mTitle">Edit script</h2>
+    <button class="btn2 btn-sm" onclick="closeModal()">Close</button>
+  </div>
+  <div id="mBody"></div>
+  <div class="row" style="margin-top:12px">
+    <button onclick="saveScript()">Save (validates)</button>
+    <button class="btn-err" onclick="delDay()">Delete script</button>
+    <span class="grow"></span>
+    <span id="mMsg" style="font-size:13px;color:var(--mut)"></span>
+  </div>
+</div></div>
+
+<div id="toast"></div>
+
+<script>
+const $=q=>document.querySelector(q);
+const DAYS=["monday","tuesday","wednesday","thursday","friday","saturday","sunday"];
+let CUR=null,timer=null,curDrawer=null;
+
+function toast(m,err){const t=$("#toast");t.textContent=m;t.className=err?"show err":"show";clearTimeout(t._t);t._t=setTimeout(()=>t.className="",2600)}
+
+async function loadState(manual){
+  try{
+    const r=await fetch("/api/state");const s=await r.json();render(s);
+  }catch(e){if(manual)toast("Server unreachable",true)}
+}
+function render(s){
+  const days=s.days||[];
+  const ready=days.filter(d=>d.video).length;
+  const uploaded=days.filter(d=>d.status==="uploaded"||d.url).length;
+  const running=days.filter(d=>["queued","building"].includes(d.status)).length;
+  $("#chips").innerHTML=
+    chip(running,"Building now")+chip(ready,"Videos ready")+chip(uploaded,"Uploaded")+
+    chip(s.schedule&&s.schedule.enabled?fmtNext(s.schedule):"off","Auto-pilot");
+  $("#days").innerHTML=days.map(d=>dcard(d)).join("");
+  const sc=s.schedule||{};
+  if(document.activeElement!==$("#schTime"))$("#schTime").value=sc.time||"17:00";
+  $("#schOn").checked=!!sc.enabled;
+  $("#schInfo").textContent=sc.enabled?("Next: "+(sc.next_run||"…").replace("T"," ").slice(0,16)):"Auto-pilot is off";
+  const h=s.history||[];
+  $("#histCard").style.display=h.length?"block":"none";
+  $("#hist").innerHTML=h.map(x=>`<div><span>${x.when.slice(5,16)} — ${esc(x.day)}</span><a href="${x.url}" target="_blank">watch ↗</a></div>`).join("");
+}
+function chip(v,l){return `<div class="chip"><small>${l}</small><b>${v}</b></div>`}
+function fmtNext(sc){return sc.next_run?sc.next_run.slice(11,16):sc.time}
+function badge(st){const m={idle:["b-idle","idle"],done:["b-done","ready"],uploaded:["b-up","on youtube"],queued:["b-run","queued"],building:["b-run","building"],error:["b-err","error"],interrupted:["b-err","interrupted"]};const[mc,tx]=m[st]||["b-idle",st||"idle"];return `<span class="badge ${mc}">${tx}</span>`}
+function esc(x){return String(x??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]))}
+function dcard(d){
+  const busy=["queued","building"].includes(d.status);
+  return `<div class="dcard">
+    ${badge(d.status)}
+    <h3>${esc(d.title||d.key)}</h3>
+    <div class="meta"><span>${d.scenes||"?"} scenes</span><span>${d.duration||"?"}s</span><span>${d.words||"?"} words</span>${d.step?`<span style="color:var(--warn)">▸ ${esc(d.step)}</span>`:""}</div>
+    <div class="dbtns">
+      <button ${busy?"disabled":""} onclick="build('${d.key}',false)">▶ Build</button>
+      <button class="btn-ok" ${busy?"disabled":""} onclick="build('${d.key}',true)">⬆ Build+Upload</button>
+      <button class="btn2" onclick="openEditor('${d.key}')">✎</button>
+    </div>
+    ${d.video||d.url?`<div class="dbtns">${d.video?`<button class="btn2" onclick="watch('${d.key}')">Watch</button>`:""}${d.url?`<button class="btn2" onclick="window.open('${d.url}','_blank')">YouTube ↗</button>`:""}</div>`:""}
+    ${d.error?`<div style="color:var(--err);font-size:12.5px">${esc(d.error).slice(0,140)}</div>`:""}
+  </div>`;
+}
+
+async function build(day,upload){
+  const r=await fetch(`/api/build/${day}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({upload})});
+  const j=await r.json();
+  if(!j.ok){toast(j.msg||"Could not start",true);return}
+  toast((upload?"Building + uploading ":"Building ")+day);
+  openDrawer(day);
+}
+async function stopJob(){if(!curDrawer)return;await fetch(`/api/stop/${curDrawer}`,{method:"POST"});toast("Stopping…")}
+
+function openDrawer(day){
+  curDrawer=day;$("#drawer").classList.add("open");$("#dLog").textContent="";$("#dVideo").style.display="none";
+  pollDrawer();
+}
+function closeDrawer(){curDrawer=null;$("#drawer").classList.remove("open")}
+async function pollDrawer(){
+  if(!curDrawer)return;
+  const[ls,ss]=await Promise.all([fetch(`/api/log/${curDrawer}`),fetch("/api/state")]);
+  const lj=await ls.json();const st=await ss.json();
+  const info=(st.days||[]).find(d=>d.key===curDrawer)||{};
+  const job=(st.jobs||{})[curDrawer]||{};
+  $("#dTitle").textContent=info.title||curDrawer;
+  $("#dStatus").innerHTML=badge(info.status)+(info.step?`<span>step: ${esc(info.step)}</span>`:"")+(job.started?`<span>started ${esc(job.started.slice(11,16))}</span>`:"");
+  const pre=$("#dLog");
+  const txt=(lj.log||[]).join("\n");
+  if(pre.textContent!==txt){const atBottom=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30;pre.textContent=txt||"waiting…";if(atBottom&&$("#dFollow").checked)pre.scrollTop=pre.scrollHeight}
+  $("#dStop").style.display=["queued","building"].includes(info.status)?"":"none";
+  if(info.status==="done"||info.status==="uploaded"){if(info.video){const v=$("#dVideo");if(!v.src.endsWith(info.video)){v.src=info.video;v.style.display="block"}}}
+  if(["queued","building"].includes(info.status)){clearTimeout(timer);timer=setTimeout(pollDrawer,1500)}
+}
+function watch(day){openDrawer(day)}
+
+/* ---------------- editor ---------------- */
+let ED=null;
+async function openEditor(key){
+  CUR=key;
+  const r=await fetch(`/api/day/${key}`);
+  if(!r.ok){toast("Load failed",true);return}
+  ED=await r.json();renderEditor(key);
+}
+function renderEditor(key){
+  $("#mTitle").textContent="Edit "+key;
+  const m=ED.metadata||{},a=ED.audio_profile||{};
+  $("#mBody").innerHTML=`
+  <label style="font-size:11.5px;color:var(--mut)">TITLE</label>
+  <input type="text" id="eTitle" value="${esc(m.title||"")}" maxlength="100">
+  <label style="font-size:11.5px;color:var(--mut);display:block;margin-top:10px">DESCRIPTION</label>
+  <textarea id="eDesc" style="min-height:60px">${esc(m.description||"")}</textarea>
+  <div class="two" style="margin-top:10px">
+    <div><label style="font-size:11.5px;color:var(--mut)">VOICE STYLE</label><input type="text" id="eVoice" value="${esc(a.recommended_voice_style||"")}"></div>
+    <div><label style="font-size:11.5px;color:var(--mut)">MUSIC VIBE</label><input type="text" id="eMusic" value="${esc(a.bg_music_vibe||"")}"></div>
+  </div>
+  <div id="scenes" style="margin-top:14px">${(ED.video_pipeline||[]).map((s,i)=>sceneHtml(s,i)).join("")}</div>
+  <button class="btn2 btn-sm" style="margin-top:4px" onclick="addScene()">+ Add scene</button>`;
+  $("#modal").classList.add("open");
+}
+function sceneHtml(s,i){return `<div class="scene" data-i="${i}">
+  <div class="sh"><b style="font-size:12.5px;color:var(--mut)">SCENE ${i+1}</b><button class="btn2 btn-sm" onclick="this.closest('.scene').remove();renum()">✕</button></div>
+  <label>Narration</label><textarea class="s-narr">${esc(s.narration_audio_text||"")}</textarea>
+  <label>Visual prompt (Pexels search)</label><input type="text" class="s-vis" value="${esc(s.visual_generation_prompt||"")}">
+  <label>On-screen text</label><input type="text" class="s-ost" value="${esc(s.on_screen_text_overlay||"")}">
+  <div class="two"><div><label>Duration (3.5–6.0s)</label><input type="text" class="s-dur" value="${s.duration_seconds}"></div></div>
+</div>`}
+function renum(){document.querySelectorAll("#scenes .scene").forEach((el,i)=>el.querySelector(".sh b").textContent="SCENE "+(i+1))}
+function addScene(){$("#scenes").insertAdjacentHTML("beforeend",sceneHtml({narration_audio_text:"",visual_generation_prompt:"",on_screen_text_overlay:"",duration_seconds:5.0},document.querySelectorAll("#scenes .scene").length));renum();const list=$("#scenes").querySelectorAll(".scene");list[list.length-1].scrollIntoView({block:"center"})}
+async function saveScript(){
+  if(!ED)return;
+  ED.metadata=ED.metadata||{};
+  ED.metadata.title=$("#eTitle").value;
+  ED.metadata.description=$("#eDesc").value;
+  ED.audio_profile=ED.audio_profile||{};
+  ED.audio_profile.recommended_voice_style=$("#eVoice").value;
+  ED.audio_profile.bg_music_vibe=$("#eMusic").value;
+  ED.video_pipeline=[...document.querySelectorAll("#scenes .scene")].map((el,i)=>({
+    scene_id:i+1,
+    narration_audio_text:el.querySelector(".s-narr").value.trim(),
+    visual_generation_prompt:el.querySelector(".s-vis").value.trim(),
+    on_screen_text_overlay:el.querySelector(".s-ost").value.trim(),
+    duration_seconds:parseFloat(el.querySelector(".s-dur").value)||5.0
+  }));
+  const r=await fetch(`/api/day/${ED._key||CUR}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(ED)});
+  const j=await r.json();
+  if(r.ok){toast("Saved ✓");closeModal();loadState()}else{$("#mMsg").textContent=j.error||"Invalid";$("#mMsg").style.color="var(--err)"}
+}
+async function delDay(){
+  if(!confirm("Delete this script permanently?"))return;
+  await fetch(`/api/day/${ED._key||CUR}/delete`,{method:"POST"});
+  toast("Deleted");closeModal();loadState();
+}
+async function openNew(){
+  const r=await fetch("/api/new",{method:"POST"});
+  const j=await r.json();
+  if(j.error){toast(j.error,true);return}
+  ED=j.payload;ED._key=j.key;renderEditor(j.key);loadState();
+}
+function closeModal(){$("#modal").classList.remove("open");$("#mMsg").textContent=""}
+
+async function saveSchedule(){
+  const r=await fetch("/api/schedule",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({time:$("#schTime").value||"17:00",enabled:$("#schOn").checked})});
+  const j=await r.json();
+  if(j.error){toast(j.error,true);return}
+  toast(j.enabled?`Auto-pilot ON at ${j.time}`:"Auto-pilot OFF");
+  loadState();
+}
+
+loadState();
+setInterval(()=>{if(document.visibilityState==="visible"&&!curDrawer)loadState()},3000);
+</script>
+</body>
+</html>

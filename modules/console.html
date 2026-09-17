@@ -211,7 +211,7 @@ async function pollDrawer(){
   const txt=(lj.log||[]).join("\n");
   if(pre.textContent!==txt){const atBottom=pre.scrollTop+pre.clientHeight>=pre.scrollHeight-30;pre.textContent=txt||"waiting…";if(atBottom&&$("#dFollow").checked)pre.scrollTop=pre.scrollHeight}
   $("#dStop").style.display=["queued","building"].includes(info.status)?"":"none";
-  if(info.status==="done"||info.status==="uploaded"){if(info.video){const v=$("#dVideo");if(!v.src.endsWith(info.video)){v.src=info.video;v.style.display="block"}}}
+  if(!["queued","building"].includes(info.status)&&info.video){const v=$("#dVideo");if(!v.src.endsWith(info.video)){v.src=info.video;v.style.display="block"}}
   if(["queued","building"].includes(info.status)){clearTimeout(timer);timer=setTimeout(pollDrawer,1500)}
 }
 function watch(day){openDrawer(day)}

@@ -283,8 +283,8 @@ def _day_info(key):
         "status": job.get("status", "idle"),
         "step": job.get("step"),
         "error": job.get("error"),
-        "video": job.get("video") if
-        (VIDEO_DIR / f"{key}_final.mp4").exists() else None,
+        "video": f"/videos/{key}_final.mp4"
+        if (VIDEO_DIR / f"{key}_final.mp4").exists() else None,
         "url": job.get("url"),
         "upload": job.get("upload"),
     }

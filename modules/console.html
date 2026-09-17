@@ -157,13 +157,23 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
 <div id="view-set" style="display:none">
 <div class="card">
   <h2>⚙ Settings</h2>
-  <label class="stlabel">OpenAI API key (for the AI Studio)</label>
+  <label class="stlabel">AI provider (used by ✨ AI Studio)</label>
+  <div class="daypills" id="provPills">
+    <button class="pill" data-p="openai" onclick="setProvider('openai')">OpenAI (paid)</button>
+    <button class="pill" data-p="gemini" onclick="setProvider('gemini')">Google Gemini (FREE tier)</button>
+    <button class="pill" data-p="custom" onclick="setProvider('custom')">Custom / Local</button>
+  </div>
+  <p id="provHint" style="font-size:12.5px;color:var(--mut);margin-top:8px"></p>
+
+  <label class="stlabel">API key</label>
   <div class="row">
-    <input type="password" id="setKey" placeholder="sk-..." style="flex:1;min-width:200px">
+    <input type="password" id="setKey" placeholder="paste your API key here" style="flex:1;min-width:200px">
     <button onclick="saveKey()">Save</button>
+    <button class="btn2" onclick="testAI()">Test</button>
+    <span id="testOut" style="font-size:12.5px"></span>
   </div>
   <p id="setStatus" style="font-size:13px;color:var(--mut);margin-top:8px"></p>
-  <p style="color:var(--mut);font-size:12.5px;margin-top:10px">Get a key at <a href="https://platform.openai.com/api-keys" target="_blank" style="color:var(--info)">platform.openai.com/api-keys</a> → Create new secret key. Costs ~$0.01 per week of scripts. Stored only in <code>config/.env</code> on your device (never uploaded to GitHub — it's gitignored).</p>
+  <p id="keyHint" style="color:var(--mut);font-size:12.5px;margin-top:10px"></p>
 </div>
 </div><!-- /view-set -->
 
@@ -320,9 +330,35 @@ async function pollAI(){
   clearTimeout(aiTimer);
   if(ai.running)aiTimer=setTimeout(pollAI,2500);
 }
+const HINTS={
+ openai:{k:'Get a key at platform.openai.com/api-keys → "Create new secret key". Requires prepaid credit at platform.openai.com/settings/organization/billing (~$0.01/week of scripts).',u:'https://platform.openai.com/api-keys'},
+ gemini:{k:'FREE: aistudio.google.com/apikey → "Create API key" (no credit card). Free tier is plenty for this pipeline. Key looks like AIza... .',u:'https://aistudio.google.com/apikey'},
+ custom:{k:'Set OPENAI_BASE_URL + AI_MODEL directly in config/.env to point at any OpenAI-compatible server (Ollama, LM Studio, etc.). Key can be anything non-empty.'}
+};
+function applyHints(p){
+  document.querySelectorAll("#provPills .pill").forEach(b=>b.classList.toggle("on",b.dataset.p===p));
+  const h=HINTS[p]||HINTS.openai;
+  const kh=$("#keyHint");
+  kh.innerHTML=h.u?`${esc(h.k)} <a href="${h.u}" target="_blank" style="color:var(--info)">Open key page ↗</a>`:esc(h.k);
+  $("#provHint").textContent={openai:"Current: OpenAI gpt-4o-mini (paid, needs credit)",gemini:"Current: FREE Google Gemini gemini-2.0-flash",custom:"Current: custom server from config/.env"}[p]||"";
+}
+async function setProvider(p){
+  const r=await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:"AI_PROVIDER",value:p})});
+  const j=await r.json();
+  if(j.ok){applyHints(p);toast("Provider: "+p)}else toast(j.error||"Failed",true);
+}
+async function testAI(){
+  $("#testOut").textContent="testing…";
+  const r=await fetch("/api/ai-test",{method:"POST"});
+  const j=await r.json();
+  $("#testOut").textContent=j.ok?"✅ works":"❌ "+(j.error||"failed");
+}
 async function loadSettings(){
   const r=await fetch("/api/settings");const j=await r.json();
-  $("#setStatus").innerHTML=j.openai_configured?`✅ OpenAI key configured (${esc(j.masked)})`:'⚠ No OpenAI key yet — the AI Studio needs one. Paste it above and tap Save.';
+  const p=j.provider||"openai";
+  applyHints(p);
+  $("#setStatus").innerHTML=(j.openai_configured?`✅ Key configured (${esc(j.masked)}) · provider: <b>${esc(p)}</b> · model: <b>${esc(j.model||"")}</b>`:'⚠ No API key yet — pick a provider above, paste the key, Save.')
+    +(j.provider==="gemini"&&!j.openai_configured?' <span style="color:var(--warn)">Gemini selected but no key saved yet.</span>':"");
 }
 async function saveKey(){
   const v=$("#setKey").value.trim();

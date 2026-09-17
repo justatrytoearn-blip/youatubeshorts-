@@ -102,6 +102,17 @@ def api_settings():
     body = request.get_json(force=True, silent=True) or {}
     key = str(body.get("key", "")).strip()
     value = str(body.get("value", "")).strip()
+    if key == "AI_PROVIDER":
+        if value not in ("openai", "gemini", "custom"):
+            return jsonify({"error": "provider must be openai, gemini or custom"}), 400
+        set_env_key("AI_PROVIDER", value)
+        if value == "gemini":
+            set_env_key("AI_MODEL", "gemini-2.0-flash")
+            set_env_key("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
+        elif value == "openai":
+            set_env_key("AI_MODEL", "gpt-4o-mini")
+            set_env_key("OPENAI_BASE_URL", "https://api.openai.com/v1")
+        return jsonify({"ok": True, "provider": value})
     if key not in ("OPENAI_API_KEY",):
         return jsonify({"error": "unknown setting"}), 400
     if not value:
@@ -115,7 +126,9 @@ def api_settings_get():
     k = os.environ.get("OPENAI_API_KEY", "")
     has = bool(k.strip()) and "REPLACE" not in k
     return jsonify({"openai_configured": has,
-                    "masked": (k[:7] + "…" + k[-4:]) if has else ""})
+                    "masked": (k[:7] + "…" + k[-4:]) if has else "",
+                    "provider": os.environ.get("AI_PROVIDER", "openai"),
+                    "model": os.environ.get("AI_MODEL", "gpt-4o-mini")})
 
 
 def day_keys():
@@ -426,46 +439,66 @@ def build_week_prompt(topic: str) -> str:
     )
 
 
+def _ai_error_detail(resp) -> str:
+    try:
+        return ((resp.json().get("error") or {}).get("message") or "").strip()
+    except Exception:
+        return ""
+
+
 def _ai_generate_script(topic: str) -> dict:
     """Call an OpenAI-compatible chat API with plain requests (no SDK needed
-    on Termux). Point OPENAI_BASE_URL at a local LLM to use free models."""
+    on Termux). Works with OpenAI, Google Gemini (free tier), and local LLM
+    servers via OPENAI_BASE_URL."""
     import requests
 
-    def _call():
-        r = requests.post(
-            os.environ.get("OPENAI_BASE_URL",
-                           "https://api.openai.com/v1").rstrip("/") + "/chat/completions",
-            headers={"Authorization":
-                     "Bearer " + os.environ.get("OPENAI_API_KEY", "").strip(),
-                     "Content-Type": "application/json"},
-            json={"model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
-                  "temperature": 0.9,
-                  "messages": [{"role": "user",
-                                "content": build_week_prompt(topic)}]},
-            timeout=180)
-        r.raise_for_status()
-        return r
+    url = os.environ.get("OPENAI_BASE_URL",
+                         "https://api.openai.com/v1").rstrip("/") + "/chat/completions"
+    headers = {"Authorization":
+               "Bearer " + os.environ.get("OPENAI_API_KEY", "").strip(),
+               "Content-Type": "application/json"}
+    body = {"model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
+            "temperature": 0.9,
+            "messages": [{"role": "user",
+                          "content": build_week_prompt(topic)}]}
 
-    last = None
-    for attempt in range(3):
+    backoffs = [5, 15, 30, 60]
+    last_err = "unknown error"
+    for attempt in range(len(backoffs) + 1):
+        resp = None
         try:
-            resp = _call()
-            break
+            resp = requests.post(url, headers=headers, json=body, timeout=180)
         except Exception as exc:  # noqa: BLE001
-            last = exc
-            time.sleep(3 * (attempt + 1))
-    else:
-        raise ValueError(f"AI service unreachable: {last}")
-    raw = (resp.json().get("choices") or [{}])[0].get("message", {}) \
-        .get("content") or ""
-    if resp.status_code != 200:
-        raise ValueError(f"AI API error {resp.status_code}")
-    try:
-        data = extract_json(raw)
-        validate_payload(data, f"AI script ({topic})")
-    except Exception as exc:  # noqa: BLE001
-        raise ValueError(f"AI returned an invalid script: {exc}") from exc
-    return data
+            last_err = f"network error: {exc}"
+        if resp is not None and resp.status_code == 200:
+            raw = (resp.json().get("choices") or [{}])[0] \
+                .get("message", {}).get("content") or ""
+            try:
+                data = extract_json(raw)
+                validate_payload(data, f"AI script ({topic})")
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(f"AI returned an invalid script: {exc}") from exc
+            return data
+        if resp is not None:
+            detail = _ai_error_detail(resp)
+            low = detail.lower()
+            if resp.status_code in (401, 403):
+                raise ValueError("API key rejected. Check the key in Settings.")
+            if resp.status_code == 429 and ("quota" in low or "billing" in low):
+                raise ValueError("AI account out of credit. Add credit on your "
+                                 "provider's billing page, or switch to the FREE "
+                                 "Google Gemini provider in Settings.")
+            if resp.status_code == 429 or resp.status_code >= 500:
+                last_err = f"HTTP {resp.status_code} {detail[:120]}"
+                ra = resp.headers.get("Retry-After")
+                delay = float(ra) if (ra or "").replace(".", "").isdigit() \
+                    else backoffs[min(attempt, len(backoffs) - 1)]
+                time.sleep(min(delay, 90))
+                continue
+            raise ValueError(f"AI API error {resp.status_code}: {detail[:180]}")
+        time.sleep(backoffs[min(attempt, len(backoffs) - 1)])
+    raise ValueError(f"AI service unreachable after retries ({last_err}). "
+                     "If this keeps happening, switch provider in Settings.")
 
 
 def _ai_worker(topic: str, days: list):
@@ -525,6 +558,16 @@ def api_ai_generate():
                                  "(console Settings tab)"}), 400
     ok, msg = start_ai_job(topic, days)
     return (jsonify({"ok": ok, "msg": msg}), 200 if ok else 409)
+
+
+@app.post("/api/ai-test")
+def api_ai_test():
+    try:
+        script = _ai_generate_script("one surprising fact about human memory")
+        n = len(script.get("video_pipeline", []))
+        return jsonify({"ok": True, "scenes": n})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": str(exc)[:300]}), 200
 
 
 @app.post("/api/import")

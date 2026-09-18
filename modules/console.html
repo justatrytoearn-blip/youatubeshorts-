@@ -97,6 +97,7 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
   <nav style="display:flex;gap:6px;flex-wrap:wrap">
     <button class="tabbtn active" id="tab-dash" onclick="showTab('dash')">Dashboard</button>
     <button class="tabbtn" id="tab-studio" onclick="showTab('studio')">✨ AI Studio</button>
+    <button class="tabbtn" id="tab-stats" onclick="showTab('stats')">📈 Stats</button>
     <button class="tabbtn" id="tab-set" onclick="showTab('set')">⚙ Settings</button>
     <button class="btn2 btn-sm" onclick="loadState(true)">Refresh</button>
   </nav>
@@ -153,6 +154,21 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
   </p>
 </div>
 </div><!-- /view-studio -->
+
+<div id="view-stats" style="display:none">
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <h2>📈 Channel stats</h2>
+    <div class="row">
+      <button class="btn2 btn-sm" onclick="loadStats(true)">Refresh</button>
+      <button class="btn2 btn-sm" onclick="directUpload()">➕ Track by video ID</button>
+    </div>
+  </div>
+  <div id="statChips" class="chips" style="margin-bottom:10px"></div>
+  <div id="statErr" style="color:var(--warn);font-size:13px;margin-bottom:8px"></div>
+  <div id="statList"></div>
+</div>
+</div><!-- /view-stats -->
 
 <div id="view-set" style="display:none">
 <div class="card">
@@ -306,9 +322,10 @@ function watch(day){openDrawer(day)}
 const DAYNAMES={monday:"Mon",tuesday:"Tue",wednesday:"Wed",thursday:"Thu",friday:"Fri",saturday:"Sat",sunday:"Sun"};
 function showTab(t){
   document.body.dataset.tab=t;
-  ["dash","studio","set"].forEach(v=>$("#view-"+v).style.display=(t===v)?"":"none");
-  ["dash","studio","set"].forEach(v=>$("#tab-"+(v==="studio"?"studio":v)).classList.toggle("active",t===v));
+  ["dash","studio","stats","set"].forEach(v=>$("#view-"+v).style.display=(t===v)?"":"none");
+  ["dash","studio","stats","set"].forEach(v=>$("#tab-"+v).classList.toggle("active",t===v));
   if(t==="studio"){renderPills();pollAI()}
+  if(t==="stats")loadStats();
   if(t==="set")loadSettings();
 }
 function renderPills(){
@@ -407,6 +424,66 @@ async function saveKey(){
   const j=await r.json();
   if(j.ok){toast("Key saved ✓");$("#setKey").value="";loadSettings()}
   else toast(j.error||"Save failed",true);
+}
+let statTimer=null;
+async function loadStats(manual){
+  clearTimeout(statTimer);
+  $("#statChips").innerHTML="";$("#statList").innerHTML='<div style="color:var(--mut)">Loading…</div>';
+  $("#statErr").textContent="";
+  const r=await fetch("/api/yt/analytics");const j=await r.json();
+  if(j.error){
+    $("#statList").innerHTML="";
+    $("#statErr").textContent=j.error;
+    return;
+  }
+  const t=j.totals||{};
+  $("#statChips").innerHTML=
+    chip((j.videos||[]).length,"Videos tracked")+
+    chip((t.views||0).toLocaleString(),"Total views")+
+    chip((t.likes||0).toLocaleString(),"Total likes")+
+    chip((t.comments||0).toLocaleString(),"Total comments");
+  const vs=j.videos||[];
+  if(!vs.length){$("#statList").innerHTML='<div style="color:var(--mut)">No videos yet — upload your first Short with ⬆ Build+Upload, or use ➕ Track by video ID.</div>';return}
+  $("#statList").innerHTML=vs.map(v=>{
+    const engagement=(v.stats.views>0?((v.stats.likes+v.stats.comments)/v.stats.views*100).toFixed(1):"0.0");
+    return `<div class="dcard" style="margin-bottom:10px">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="min-height:0">${esc(v.title)}</h3>
+        <span class="badge ${v.is_short?"b-up":"b-idle"}">${v.is_short?"Short":"video"}</span>
+      </div>
+      <div class="meta"><span>👁 ${v.stats.views.toLocaleString()}</span><span>👍 ${v.stats.likes.toLocaleString()}</span><span>💬 ${v.stats.comments.toLocaleString()}</span><span>⚡ ${engagement}% engagement</span><span>${esc(v.published)}</span></div>
+      <div class="row" style="gap:6px">
+        <a class="btn2 btn-sm" style="text-decoration:none;padding:7px 12px" href="https://youtube.com/shorts/${v.id}" target="_blank">Open ↗</a>
+        <button class="btn2 btn-sm" onclick="toggleComments('${v.id}')">💬 Comments</button>
+        <span class="grow"></span>
+        <button class="btn2 btn-sm" onclick="untrack('${v.id}')">✕ untrack</button>
+      </div>
+      <div id="cmts-${v.id}" style="display:none;background:var(--card2);border:1px solid var(--line);border-radius:10px;padding:10px;font-size:13px"></div>
+    </div>`;
+  }).join("");
+  clearTimeout(statTimer);
+  if(document.body.dataset.tab==="stats")statTimer=setTimeout(loadStats,60000);
+}
+function toggleComments(id){
+  const el=$("#cmts-"+id);
+  if(el.style.display==="block"){el.style.display="none";return}
+  el.style.display="block";
+  fetch("/api/yt/analytics").then(r=>r.json()).then(j=>{
+    const v=(j.videos||[]).find(x=>x.id===id);
+    const cs=(v&&v.top_comments)||[];
+    el.innerHTML=cs.length?cs.map(c=>`<div style="padding:6px 0;border-bottom:1px solid var(--line)"><b style="color:var(--info)">${esc(c.author)}</b> <span style="color:var(--mut)">said:</span> ${esc(c.text)}</div>`).join(""):'<span style="color:var(--mut)">No comments yet (or comments are off for this video).</span>';
+  });
+}
+async function directUpload(){
+  const id=prompt("Paste the YouTube video ID or link:\n(e.g. dQw4w9WgXcQ or https://youtube.com/shorts/dQw4w9WgXcQ)\n\nUse this for videos uploaded outside the console.");
+  if(!id)return;
+  const r=await fetch("/api/yt/direct-upload",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+  const j=await r.json();
+  if(j.ok){toast("Now tracking "+j.id);loadStats(true)}else toast(j.error||"Failed",true);
+}
+async function untrack(id){
+  await fetch("/api/yt/history-remove",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
+  loadStats(true);toast("Removed from tracking");
 }
 let ED=null;
 async function openEditor(key){

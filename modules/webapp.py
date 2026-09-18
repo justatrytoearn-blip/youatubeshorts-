@@ -458,6 +458,135 @@ def api_delete_day(day):
     return jsonify({"ok": True})
 
 
+# -------------------------------------------------------- YouTube extras ---
+def get_youtube_service():
+    """Reuse upload.py's OAuth flow (its scopes cover read + upload)."""
+    sys.path.insert(0, str(MOD_DIR))
+    import upload as yt_upload
+    return yt_upload.get_service()
+
+
+def _dur_secs(iso: str) -> int:
+    import re
+    m = re.match(r"PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
+    if not m:
+        return 0
+    h, mi, s = (int(x) if x else 0 for x in m.groups())
+    return h * 3600 + mi * 60 + s
+
+
+def pick_video_id(item: dict) -> str:
+    vid = (item.get("contentDetails", {}).get("upload", {}).get("videoId")
+           or (item.get("id").get("videoId") if isinstance(item.get("id"), dict)
+               else item.get("id")))
+    return vid if isinstance(vid, str) else ""
+
+
+@app.get("/api/yt/analytics")
+def api_yt_analytics():
+    """Views/likes/comments for every tracked video (history + channel)."""
+    try:
+        yt = get_youtube_service()
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": "YouTube connection not ready: " + str(exc)[:160] +
+                                 ". Run one Build+Upload first and approve the "
+                                 "Google consent link."}), 200
+    try:
+        ids, seen = [], set()
+        for h in state.get("history", []):
+            vid = h.get("url", "").rsplit("/", 1)[-1]
+            if vid and vid not in seen:
+                seen.add(vid)
+                ids.append(vid)
+        try:
+            items = yt.search().list(part="id", forMine=True, order="date",
+                                     maxResults=25, type="video") \
+                .execute().get("items", [])
+            for it in items:
+                vid = pick_video_id(it)
+                if vid and vid not in seen:
+                    seen.add(vid)
+                    ids.append(vid)
+        except Exception:
+            pass   # search may be unavailable; history tracking still works
+        if not ids:
+            return jsonify({"videos": [],
+                            "totals": {"views": 0, "likes": 0,
+                                       "comments": 0}}), 200
+        resp = yt.videos().list(part="snippet,statistics,contentDetails",
+                                id=",".join(ids[:50])).execute()
+        videos, totals = [], {"views": 0, "likes": 0, "comments": 0}
+        for it in resp.get("items", []):
+            sn, st = it.get("snippet", {}), it.get("statistics", {})
+            dur = it.get("contentDetails", {}).get("duration", "")
+            views = int(st.get("viewCount", 0))
+            likes = int(st.get("likeCount", 0))
+            comments = int(st.get("commentCount", 0))
+            totals["views"] += views
+            totals["likes"] += likes
+            totals["comments"] += comments
+            top = []
+            if comments:
+                try:
+                    tr = yt.commentThreads().list(
+                        part="snippet", videoId=it["id"], order="relevance",
+                        maxResults=3).execute()
+                    for c in tr.get("items", []):
+                        cs = c["snippet"]["topLevelComment"]["snippet"]
+                        top.append({"author": cs.get("authorDisplayName", ""),
+                                    "text": (cs.get("textOriginal", "")
+                                             or cs.get("textDisplay", ""))[:160]})
+                except Exception:
+                    pass
+            videos.append({"id": it["id"], "title": sn.get("title", ""),
+                           "published": sn.get("publishedAt", "")[:16]
+                           .replace("T", " "),
+                           "is_short": _dur_secs(dur) <= 61,
+                           "top_comments": top,
+                           "stats": {"views": views, "likes": likes,
+                                     "comments": comments}})
+        return jsonify({"videos": videos, "totals": totals}), 200
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"YouTube API error: {exc}"}), 200
+
+
+@app.post("/api/yt/direct-upload")
+def api_yt_direct_upload():
+    """Track an already-uploaded video by its YouTube ID."""
+    vid = str((request.get_json(force=True, silent=True) or {})
+              .get("id", "")).strip()
+    if not vid or not vid.isalnum() or len(vid) > 20:
+        return jsonify({"error": "that does not look like a video ID"}), 400
+    try:
+        yt = get_youtube_service()
+        items = yt.videos().list(part="snippet", id=vid).execute() \
+            .get("items", [])
+        if not items:
+            return jsonify({"error": "video not found (wrong ID?)"}), 200
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": "YouTube connection not ready: "
+                                 + str(exc)[:160]}), 200
+    sn = items[0].get("snippet", {})
+    state["history"].insert(0, {
+        "day": (sn.get("title", vid) or vid)[:40],
+        "url": "https://youtube.com/shorts/" + vid,
+        "when": datetime.now().isoformat(timespec="seconds"),
+        "title": sn.get("title", "")})
+    del state["history"][24:]
+    save_state()
+    return jsonify({"ok": True, "id": vid})
+
+
+@app.post("/api/yt/history-remove")
+def api_yt_history_remove():
+    vid = str((request.get_json(force=True, silent=True) or {})
+              .get("id", "")).strip()
+    state["history"] = [h for h in state.get("history", [])
+                        if h.get("url", "").rsplit("/", 1)[-1] != vid]
+    save_state()
+    return jsonify({"ok": True})
+
+
 def extract_json(text: str) -> dict:
     """Pull the first JSON object out of raw ChatGPT output (tolerant of
     markdown fences, chatter, multiple blocks)."""

@@ -97,6 +97,7 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
   <nav style="display:flex;gap:6px;flex-wrap:wrap">
     <button class="tabbtn active" id="tab-dash" onclick="showTab('dash')">Dashboard</button>
     <button class="tabbtn" id="tab-studio" onclick="showTab('studio')">✨ AI Studio</button>
+    <button class="tabbtn" id="tab-library" onclick="showTab('library')">🎬 Library</button>
     <button class="tabbtn" id="tab-stats" onclick="showTab('stats')">📈 Stats</button>
     <button class="tabbtn" id="tab-set" onclick="showTab('set')">⚙ Settings</button>
     <button class="btn2 btn-sm" onclick="loadState(true)">Refresh</button>
@@ -115,6 +116,19 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
     <div class="grow" style="color:var(--mut);font-size:13.5px" id="schInfo"></div>
   </div>
   <p style="color:var(--mut);font-size:12.5px;margin-top:10px">When enabled, this running server auto-builds + uploads the matching day's script once per day at the set time. Keep Termux alive: <code>termux-wake-lock</code>.</p>
+</div>
+
+<div class="card">
+  <h2>📦 Batch build & upload</h2>
+  <p style="color:var(--mut);font-size:12.5px;margin-bottom:10px">Pick any scripts and build (or build+upload) them one after another — no babysitting.</p>
+  <div class="daypills" id="batchPills"></div>
+  <div class="row" style="margin-top:12px">
+    <button onclick="runBatch(false)">▶ Build selected</button>
+    <button class="btn-ok" onclick="runBatch(true)">⬆ Build+Upload selected</button>
+    <span class="grow"></span>
+    <button class="btn-err btn-sm" id="batchStop" style="display:none" onclick="stopBatch()">Stop batch</button>
+  </div>
+  <div id="batchProg" style="margin-top:10px;display:none"></div>
 </div>
 
 <div class="grid" id="days"></div>
@@ -165,6 +179,17 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
   </p>
 </div>
 </div><!-- /view-studio -->
+
+<div id="view-library" style="display:none">
+<div class="card">
+  <div class="row" style="justify-content:space-between">
+    <h2>🎬 Video library</h2>
+    <button class="btn2 btn-sm" onclick="loadLibrary(true)">Refresh</button>
+  </div>
+  <p id="libEmpty" style="color:var(--mut);font-size:13.5px;display:none">No videos yet — build one from the Dashboard or generate scripts in the AI Studio.</p>
+  <div id="libList"></div>
+</div>
+</div><!-- /view-library -->
 
 <div id="view-stats" style="display:none">
 <div class="card">
@@ -308,6 +333,8 @@ function render(s){
     chip(running,"Building now")+chip(ready,"Videos ready")+chip(uploaded,"Uploaded")+
     chip(s.schedule&&s.schedule.enabled?fmtNext(s.schedule):"off","Auto-pilot");
   $("#days").innerHTML=days.map(d=>dcard(d)).join("");
+  renderBatchPills(days.map(d=>d.key));
+  pollBatch();
   const sc=s.schedule||{};
   if(document.activeElement!==$("#schTime"))$("#schTime").value=sc.time||"17:00";
   $("#schOn").checked=!!sc.enabled;
@@ -332,6 +359,7 @@ function dcard(d){
       <button class="btn2" onclick="openEditor('${d.key}')">✎</button>
     </div>
     ${d.video||d.url?`<div class="dbtns">${d.video?`<button class="btn2" onclick="watch('${d.key}')">Watch</button>`:""}${d.url?`<button class="btn2" onclick="window.open('${d.url}','_blank')">YouTube ↗</button>`:""}</div>`:""}
+    ${d.error&&!busy?`<div class="row" style="background:#3a1418;border:1px solid var(--err);border-radius:10px;padding:8px 10px;font-size:12.5px;color:var(--err)"><span style="flex:1">${esc(d.error).slice(0,120)}</span><button class="btn2 btn-sm" onclick="clearError('${d.key}')">✕ clear</button></div>`:""}
     ${d.need_consent?`<div style="background:#332a10;border:1px solid var(--warn);border-radius:10px;padding:8px 10px;font-size:12.5px;color:var(--warn)">Video built — YouTube not connected. <a href="#" onclick="showTab('stats');return false" style="color:var(--info)">Connect YouTube</a>, then Build+Upload again.</div>`:""}
     ${d.error?`<div style="color:var(--err);font-size:12.5px">${esc(d.error).slice(0,140)}</div>`:""}
   </div>`;
@@ -345,6 +373,12 @@ async function build(day,upload){
   openDrawer(day);
 }
 async function stopJob(){if(!curDrawer)return;await fetch(`/api/stop/${curDrawer}`,{method:"POST"});toast("Stopping…")}
+async function clearError(day){
+  const r=await fetch(`/api/clear-error/${day}`,{method:"POST"});
+  const j=await r.json();
+  if(j.error){toast(j.error,true);return}
+  toast("Error cleared");loadState();
+}
 
 function openDrawer(day){
   curDrawer=day;$("#drawer").classList.add("open");$("#dLog").textContent="";$("#dVideo").style.display="none";
@@ -372,9 +406,10 @@ function watch(day){openDrawer(day)}
 const DAYNAMES={monday:"Mon",tuesday:"Tue",wednesday:"Wed",thursday:"Thu",friday:"Fri",saturday:"Sat",sunday:"Sun"};
 function showTab(t){
   document.body.dataset.tab=t;
-  ["dash","studio","stats","set"].forEach(v=>$("#view-"+v).style.display=(t===v)?"":"none");
-  ["dash","studio","stats","set"].forEach(v=>$("#tab-"+v).classList.toggle("active",t===v));
+  ["dash","studio","library","stats","set"].forEach(v=>$("#view-"+v).style.display=(t===v)?"":"none");
+  ["dash","studio","library","stats","set"].forEach(v=>$("#tab-"+v).classList.toggle("active",t===v));
   if(t==="studio"){renderPills();pollAI();loadVoices()}
+  if(t==="library")loadLibrary();
   if(t==="stats")loadStats();
   if(t==="set")loadSettings();
 }
@@ -384,6 +419,41 @@ function renderPills(){
   el.innerHTML=Object.keys(DAYNAMES).map(d=>`<button class="pill" data-day="${d}">${DAYNAMES[d]}</button>`).join("");
   el.addEventListener("click",e=>{const b=e.target.closest(".pill");if(b)b.classList.toggle("on")});
   el.dataset.init=1;
+}
+let batchInit=false;
+function renderBatchPills(keys){
+  const el=$("#batchPills");
+  el.innerHTML=keys.map(k=>`<button class="pill" data-day="${k}">${DAYNAMES[k.replace(/^day\\d+_/,"")]||k}</button>`).join("");
+  if(!batchInit){
+    el.addEventListener("click",e=>{const b=e.target.closest(".pill");if(b)b.classList.toggle("on")});
+    batchInit=true;
+  }
+}
+function selBatchDays(){return [...document.querySelectorAll("#batchPills .pill.on")].map(b=>b.dataset.day)}
+async function runBatch(upload){
+  const days=selBatchDays();
+  if(!days.length){toast("Pick scripts first",true);return}
+  const r=await fetch("/api/queue",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({days,upload})});
+  const j=await r.json();
+  if(!j.ok){toast(j.error||"Failed",true);return}
+  toast("Batch started: "+days.length+" video(s)");
+  pollBatch();
+}
+async function stopBatch(){
+  await fetch("/api/queue/stop",{method:"POST"});toast("Stopping after current video…");
+}
+let batchTimer=null;
+async function pollBatch(){
+  const s=await (await fetch("/api/state")).json();
+  const q=s.queue||{running:false,items:[]};
+  const box=$("#batchProg");
+  if(!q.items||!q.items.length){box.style.display="none";$("#batchStop").style.display="none";return}
+  box.style.display="block";
+  $("#batchStop").style.display=q.running?"inline-block":"none";
+  box.innerHTML=`<div style="font-size:12.5px;color:var(--mut);margin-bottom:4px">${q.running?`⏳ ${esc(q.current||"")}`:"Batch finished"}</div>`+
+    q.items.map(p=>`<div class="prog"><span class="st ${p.status.startsWith("error")?"error":p.status==="done"?"done":p.status==="building"?"building":"pending"}">${p.status.startsWith("error")?"error":p.status}</span><span>${DAYNAMES[p.day.replace(/^day\\d+_/,"")]||p.day}</span>${p.status.startsWith("error")?`<span class="errtxt">${esc(p.status)}</span>`:""}</div>`).join("");
+  clearTimeout(batchTimer);
+  if(q.running)batchTimer=setTimeout(pollBatch,3000);else loadState();
 }
 function selDays(){return [...document.querySelectorAll("#dayPills .pill.on")].map(b=>b.dataset.day)}
 let aiTimer=null;
@@ -600,6 +670,41 @@ async function untrack(id){
   await fetch("/api/yt/history-remove",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({id})});
   loadStats(true);toast("Removed from tracking");
 }
+let libTimer=null;
+async function loadLibrary(manual){
+  clearTimeout(libTimer);
+  const r=await fetch("/api/library");const j=await r.json();
+  const vs=j.videos||[];
+  $("#libEmpty").style.display=vs.length?"none":"block";
+  $("#libList").innerHTML=vs.map(v=>`
+    <div class="dcard" style="margin-bottom:10px">
+      <div class="row" style="justify-content:space-between">
+        <h3 style="min-height:0">${esc(v.title)}</h3>
+        <span class="badge ${v.url?"b-up":"b-done"}">${v.url?"on youtube":"local"}</span>
+      </div>
+      <div class="meta"><span>${(v.size_kb/1024).toFixed(1)} MB</span><span>${v.modified.replace("T"," ").slice(0,16)}</span>${v.url?`<a href="${v.url}" target="_blank" style="color:var(--info)">watch on YouTube ↗</a>`:""}</div>
+      <video controls preload="metadata" style="max-height:300px" src="/videos/${v.file}"></video>
+      <div class="row" style="gap:8px">
+        <button class="btn2 btn-sm" onclick="watch('${v.key}')">Full log</button>
+        ${v.url?"":`<button class="btn-ok btn-sm" onclick="libUpload('${v.key}')">⬆ Upload</button>`}
+        <span class="grow"></span>
+        <button class="btn-err btn-sm" onclick="libDelete('${v.key}')">🗑 Delete</button>
+      </div>
+    </div>`).join("");
+  if(document.body.dataset.tab==="library")libTimer=setTimeout(loadLibrary,8000);
+}
+async function libUpload(key){
+  const r=await fetch(`/api/library/${key}/upload`,{method:"POST"});
+  const j=await r.json();
+  if(j.ok){toast("Uploading "+key+" — watch progress on the Dashboard");showTab('dash')}
+  else toast(j.error||"Failed",true);
+}
+async function libDelete(key){
+  if(!confirm("Delete the rendered video file for "+key+"? (The script stays.)"))return;
+  const r=await fetch(`/api/library/${key}/delete`,{method:"POST"});
+  const j=await r.json();
+  if(j.ok){toast("Deleted");loadLibrary(true)}else toast(j.error||"Failed",true);
+}
 let ED=null;
 async function openEditor(key){
   CUR=key;
@@ -636,8 +741,15 @@ function renderEditor(key){
       <input type="number" id="eTarget" min="30" max="60" value="${a.target_seconds||""}" placeholder="e.g. 50"></div>
   </div>
   <div class="two" style="margin-top:10px">
-    <div><label style="font-size:11.5px;color:var(--mut)">MUSIC VIBE</label><input type="text" id="eMusic" value="${esc(a.bg_music_vibe||"")}"></div>
-    <div></div>
+    <div><label style="font-size:11.5px;color:var(--mut)">MUSIC STYLE</label>
+      <select id="eMusicStyle">${["none","dark","emotional","energetic","epic","lofi","suspense"].map(s=>`<option value="${s}" ${a.music_style===s?"selected":""}>${s==="none"?"none — silent":s}</option>`).join("")}</select></div>
+    <div><label style="font-size:11.5px;color:var(--mut)">MUSIC VOLUME</label>
+      <select id="eMusicVol">${["-30","-24","-18","-12","-8"].map(v=>`<option value="${v}" ${String(a.music_volume_db??"-18")===v?"selected":""}>${v==="-30"?"-30 — very quiet":v==="-8"?"-8 — loud":v+" dB"}</option>`).join("")}</select></div>
+  </div>
+  <div class="two" style="margin-top:10px">
+    <div><label style="font-size:11.5px;color:var(--mut)">ANIMATION (all scenes)</label>
+      <select id="eAnim">${["static","zoom-in","zoom-out","pan-up","pan-down"].map(s=>`<option value="${s}" ${(a.animation_style||"static")===s?"selected":""}>${s}</option>`).join("")}</select></div>
+    <div><label style="font-size:11.5px;color:var(--mut)">MUSIC VIBE (free text, optional)</label><input type="text" id="eMusic" value="${esc(a.bg_music_vibe||"")}"></div>
   </div>
   <div id="scenes" style="margin-top:14px">${(ED.video_pipeline||[]).map((s,i)=>sceneHtml(s,i)).join("")}</div>
   <button class="btn2 btn-sm" style="margin-top:4px" onclick="addScene()">+ Add scene</button>`;
@@ -653,9 +765,23 @@ function editorLangChanged(){
     .map(g=>`<optgroup label="${g[0].toUpperCase()+g.slice(1)} voices">`+
       grp[g].map(v=>`<option value="${v.id}">${v.label.replace(/^(US|UK) • /,"")}</option>`).join("")+"</optgroup>").join("");
 }
-function sceneHtml(s,i){return `<div class="scene" data-i="${i}">
+function sceneHtml(s,i){
+  const lang=$("#eLang")?$("#eLang").value:(ED.audio_profile||{}).language||"en";
+  const allV=(VOICES&&VOICES.languages)||{};
+  const vlist=allV[lang]||allV.en||[];
+  const sv=(s.voice_profile||{}).voice_id||"";
+  const vopts=['<option value="">default (script voice)</option>']
+    .concat(vlist.map(v=>`<option value="${v.id}" ${v.id===sv?"selected":""}>${v.label.replace(/^(US|UK) • /,"")}</option>`));
+  const anim=s.animation_style||"";
+  const aopts=['<option value="">default</option>']
+    .concat(["static","zoom-in","zoom-out","pan-up","pan-down"].map(a=>`<option value="${a}" ${anim===a?"selected":""}>${a}</option>`));
+  return `<div class="scene" data-i="${i}">
   <div class="sh"><b style="font-size:12.5px;color:var(--mut)">SCENE ${i+1}</b><button class="btn2 btn-sm" onclick="this.closest('.scene').remove();renum()">✕</button></div>
   <label>Narration</label><textarea class="s-narr">${esc(s.narration_audio_text||"")}</textarea>
+  <div class="two">
+    <div><label>Scene voice</label><select class="s-voice">${vopts.join("")}</select></div>
+    <div><label>Animation</label><select class="s-anim">${aopts.join("")}</select></div>
+  </div>
   <label>Visual prompt (Pexels search)</label><input type="text" class="s-vis" value="${esc(s.visual_generation_prompt||"")}">
   <label>On-screen text</label><input type="text" class="s-ost" value="${esc(s.on_screen_text_overlay||"")}">
   <div class="two"><div><label>Duration (3.5–6.0s)</label><input type="text" class="s-dur" value="${s.duration_seconds}"></div></div>
@@ -674,13 +800,23 @@ async function saveScript(){
   const tgt=$("#eTarget")?parseFloat($("#eTarget").value):0;
   if(tgt&&tgt>=30)ED.audio_profile.target_seconds=tgt;else delete ED.audio_profile.target_seconds;
   ED.audio_profile.bg_music_vibe=$("#eMusic")?$("#eMusic").value:ED.audio_profile.bg_music_vibe||"";
-  ED.video_pipeline=[...document.querySelectorAll("#scenes .scene")].map((el,i)=>({
-    scene_id:i+1,
-    narration_audio_text:el.querySelector(".s-narr").value.trim(),
-    visual_generation_prompt:el.querySelector(".s-vis").value.trim(),
-    on_screen_text_overlay:el.querySelector(".s-ost").value.trim(),
-    duration_seconds:parseFloat(el.querySelector(".s-dur").value)||5.0
-  }));
+  ED.audio_profile.animation_style=$("#eAnim")?$("#eAnim").value:"static";
+  ED.audio_profile.music_style=$("#eMusicStyle")?$("#eMusicStyle").value:"dark";
+  ED.audio_profile.music_volume_db=parseFloat($("#eMusicVol")?$("#eMusicVol").value:"-18");
+  ED.video_pipeline=[...document.querySelectorAll("#scenes .scene")].map((el,i)=>{
+    const o={
+      scene_id:i+1,
+      narration_audio_text:el.querySelector(".s-narr").value.trim(),
+      visual_generation_prompt:el.querySelector(".s-vis").value.trim(),
+      on_screen_text_overlay:el.querySelector(".s-ost").value.trim(),
+      duration_seconds:parseFloat(el.querySelector(".s-dur").value)||5.0
+    };
+    const anim=el.querySelector(".s-anim").value;
+    if(anim)o.animation_style=anim;
+    const sv=el.querySelector(".s-voice").value;
+    if(sv)o.voice_profile={voice_id:sv};
+    return o;
+  });
   const r=await fetch(`/api/day/${ED._key||CUR}`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(ED)});
   const j=await r.json();
   if(r.ok){toast("Saved ✓");closeModal();loadState()}else{$("#mMsg").textContent=j.error||"Invalid";$("#mMsg").style.color="var(--err)"}

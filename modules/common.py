@@ -64,6 +64,15 @@ def validate_payload(data: dict, name: str = ""):
         d = float(s["duration_seconds"])
         if not 3.5 <= d <= 6.0:
             raise ValueError(f"{name} scene {i}: duration {d} outside 3.5-6.0")
+        anim = str(s.get("animation_style", ""))
+        if anim and anim not in ("static", "zoom-in", "zoom-out",
+                                 "pan-up", "pan-down"):
+            raise ValueError(f"{name} scene {i}: unknown animation_style "
+                             f"{anim!r}")
+        vp = s.get("voice_profile")
+        if vp is not None and not isinstance(vp, dict):
+            raise ValueError(f"{name} scene {i}: voice_profile must be an "
+                             "object like {\"voice_id\": \"en-US-AvaNeural\"}")
         total += d
         words += len(s["narration_audio_text"].split())
     if not 40 <= total <= 62:

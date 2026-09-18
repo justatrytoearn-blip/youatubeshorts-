@@ -46,6 +46,8 @@ def default_state():
     return {"jobs": {}, "schedule": {"enabled": False, "time": "17:00",
                                      "last_run_date": "", "next_run": ""},
             "history": [],
+            "queue": {"running": False, "items": [], "upload": False,
+                      "current": ""},
             "ai_job": {"running": False, "topic": "", "progress": []}}
 
 
@@ -57,6 +59,8 @@ def load_state():
         except Exception:
             pass
     st.setdefault("ai_job", {"running": False, "topic": "", "progress": []})
+    st.setdefault("queue", {"running": False, "items": [], "upload": False,
+                            "current": ""})
     if st["ai_job"].get("running"):   # a dead process can't finish it
         st["ai_job"]["running"] = False
         for entry in st["ai_job"].get("progress", []):
@@ -323,11 +327,13 @@ def _worker(day, upload):
     job["started"] = datetime.now().isoformat(timespec="seconds")
     _log(day, f"=== build {day} (upload={upload}) ===")
     save_state()
-    steps = [
-        ("tts", [sys.executable, MOD_DIR / "tts_engine.py", day]),
-        ("assets", [sys.executable, MOD_DIR / "pexels_assets.py", day]),
-        ("render", [sys.executable, MOD_DIR / "render.py", day]),
-    ]
+    steps = []
+    if not job.get("render_only"):
+        steps += [
+            ("tts", [sys.executable, MOD_DIR / "tts_engine.py", day]),
+            ("assets", [sys.executable, MOD_DIR / "pexels_assets.py", day]),
+        ]
+    steps.append(("render", [sys.executable, MOD_DIR / "render.py", day]))
     if upload and os.environ.get("DRY_RUN", "false").lower() != "true":
         if not yt_client.creds_available():
             job["need_consent"] = True
@@ -366,6 +372,10 @@ def _worker(day, upload):
         job["status"] = "error"
         job["error"] = str(exc)
         _log(day, f"FAILED: {exc}")
+    else:
+        # successful run clears any stale error banner
+        job["error"] = None
+        job["need_consent"] = False
     finally:
         job["step"] = None
         job.pop("_proc", None)
@@ -455,6 +465,8 @@ def api_state():
         return jsonify({"days": days, "schedule": state["schedule"],
                         "history": state["history"][:10],
                         "ai_job": state["ai_job"],
+                        "queue": {k: v for k, v in state["queue"].items()
+                                  if k != "stop_requested"},
                         "jobs": {k: {kk: vv for kk, vv in j.items()
                                      if kk != "_proc"}
                                  for k, j in state["jobs"].items()},
@@ -953,6 +965,160 @@ def api_video(name):
 def api_log(day):
     job = state["jobs"].get(day, {})
     return jsonify({"log": job.get("log", [])})
+
+
+@app.post("/api/clear-error/<day>")
+def api_clear_error(day):
+    """Manually clear a job's error state (banner + status chip)."""
+    job = state["jobs"].get(day)
+    if not job:
+        return jsonify({"ok": True, "cleared": False})
+    if job.get("status") in ("queued", "building"):
+        return jsonify({"error": "job is running"}), 409
+    if job.get("status") == "error":
+        job["status"] = "idle"
+    job["error"] = None
+    job["need_consent"] = False
+    save_state()
+    return jsonify({"ok": True})
+
+
+# ------------------------------------------------------- video library ---
+@app.get("/api/library")
+def api_library():
+    """Every rendered video + its tracking state, for the Library tab."""
+    items = []
+    tracked = {h.get("url", "").rsplit("/", 1)[-1]
+               for h in state.get("history", [])}
+    for p in sorted(VIDEO_DIR.glob("*_final.mp4"),
+                    key=lambda x: x.stat().st_mtime, reverse=True):
+        key = p.stem.replace("_final", "")
+        job = state["jobs"].get(key, {})
+        size_kb = p.stat().st_size // 1024
+        title = ""
+        try:
+            title = load_payload(key).get("metadata", {}).get("title", "")
+        except Exception:
+            pass
+        items.append({
+            "key": key,
+            "file": p.name,
+            "title": title or key,
+            "size_kb": size_kb,
+            "modified": datetime.fromtimestamp(p.stat().st_mtime)
+            .isoformat(timespec="seconds"),
+            "url": job.get("url"),
+            "tracked": bool(job.get("url")) or bool(
+                (job.get("url") or "").rsplit("/", 1)[-1] in tracked),
+            "status": job.get("status", "idle"),
+        })
+    return jsonify({"videos": items})
+
+
+@app.post("/api/library/<key>/upload")
+def api_library_upload(key):
+    """Upload an already-rendered library video to YouTube."""
+    key = safe_key(key)
+    video = VIDEO_DIR / f"{key}_final.mp4"
+    if not video.exists():
+        return jsonify({"error": "video not found"}), 404
+    if not yt_client.creds_available():
+        return jsonify({"error": "Connect YouTube first (Stats tab)."}), 400
+    if key in running_days():
+        return jsonify({"error": "a job for this video is running"}), 409
+    state["jobs"][key] = {"status": "queued", "step": None, "upload": True,
+                          "log": [], "started": None, "ended": None,
+                          "error": None, "video": f"/videos/{video.name}",
+                          "url": None, "render_only": True}
+    save_state()
+    threading.Thread(target=_worker, args=(key, True), daemon=True).start()
+    return jsonify({"ok": True})
+
+
+@app.post("/api/library/<key>/delete")
+def api_library_delete(key):
+    key = safe_key(key)
+    video = VIDEO_DIR / f"{key}_final.mp4"
+    if key in running_days():
+        return jsonify({"error": "job running for this video"}), 409
+    deleted = []
+    if video.exists():
+        video.unlink()
+        deleted.append(video.name)
+    tmp = VIDEO_DIR / f"tmp_{key}"
+    if tmp.exists():
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+        deleted.append("tmp files")
+    return jsonify({"ok": True, "deleted": deleted})
+
+
+# ----------------------------------------------------- multi-video queue ---
+def _queue_worker(keys: list, upload: bool):
+    q = state["queue"]
+    try:
+        for i, day in enumerate(keys, 1):
+            if q.get("stop_requested"):
+                for e in q["items"]:
+                    if e["status"] in ("pending", "building"):
+                        e["status"] = "skipped"
+                break
+            q["current"] = f"{i}/{len(keys)}: {day}"
+            entry = next((e for e in q["items"] if e["day"] == day), None)
+            if entry:
+                entry["status"] = "building"
+            save_state()
+            start_job(day, upload=upload)
+            while day in running_days():
+                time.sleep(2)
+            job = state["jobs"].get(day, {})
+            if entry:
+                entry["status"] = ("done" if job.get("status") in
+                                   ("done", "uploaded") else
+                                   f"error: {str(job.get('error'))[:60]}")
+            save_state()
+    finally:
+        q["running"] = False
+        q["current"] = ""
+        q.pop("stop_requested", None)
+        save_state()
+
+
+@app.post("/api/queue")
+def api_queue():
+    """Build (and optionally upload) several scripts one after another."""
+    body = request.get_json(force=True, silent=True) or {}
+    keys = [k for k in (safe_key(x) for x in (body.get("days") or [])) if k]
+    upload = bool(body.get("upload"))
+    if not keys:
+        return jsonify({"error": "pick at least one day"}), 400
+    missing = [k for k in keys if not (CONTENT_DIR / f"{k}.json").exists()]
+    if missing:
+        return jsonify({"error": "no script for: " + ", ".join(missing)}), 400
+    with _lock:
+        q = state["queue"]
+        if q.get("running"):
+            return jsonify({"error": "a batch is already running"}), 409
+        busy = [k for k in keys if k in running_days()]
+        if busy:
+            return jsonify({"error": "already building: " + ", "
+                           .join(busy)}), 409
+        q["running"] = True
+        q["upload"] = upload
+        q["items"] = [{"day": k, "status": "pending"} for k in keys]
+        save_state()
+    threading.Thread(target=_queue_worker, args=(keys, upload),
+                     daemon=True).start()
+    return jsonify({"ok": True, "count": len(keys)})
+
+
+@app.post("/api/queue/stop")
+def api_queue_stop():
+    with _lock:
+        if not state["queue"].get("running"):
+            return jsonify({"error": "no batch running"}), 404
+        state["queue"]["stop_requested"] = True
+    return jsonify({"ok": True})
 
 
 def main():

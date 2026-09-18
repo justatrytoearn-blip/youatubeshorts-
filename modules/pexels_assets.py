@@ -134,13 +134,44 @@ def fetch_scene_assets(day: str, payload: dict) -> dict:
     return mapping
 
 
+MUSIC_PRESETS = {
+    "none": "",
+    "dark": "dark ambient cinematic tension",
+    "emotional": "emotional cinematic piano",
+    "energetic": "energetic upbeat electronic",
+    "epic": "epic orchestral trailer",
+    "lofi": "lofi chill hip hop beat",
+    "suspense": "suspense thriller tension drone",
+}
+
+
 def fetch_music(payload: dict, day: str):
-    """Fetch a background music track. Pixabay music (free) or local fallback."""
-    vibe = payload.get("audio_profile", {}).get("bg_music_vibe", "dark cinematic")
+    """Fetch background music per audio_profile.music_style (or legacy vibe).
+    Re-fetches when the requested style changes."""
+    prof = payload.get("audio_profile", {})
+    style = str(prof.get("music_style") or "").strip().lower()
+    if style == "none":
+        out = ASSET_DIR / day / "music.mp3"
+        if out.exists():
+            out.unlink()
+        return None
+    vibe = (MUSIC_PRESETS.get(style)
+            or prof.get("bg_music_vibe") or "dark cinematic")
     day_dir = ASSET_DIR / day
     out = day_dir / "music.mp3"
+    style_file = day_dir / "music_style.txt"
     if out.exists():
-        return str(out)
+        try:
+            if style and style_file.exists() \
+                    and style_file.read_text().strip() == style:
+                return str(out)
+        except Exception:
+            pass
+        if not style:  # legacy behavior: any existing track is kept
+            return str(out)
+        out.unlink()  # style changed -> fetch a matching track
+    if style:
+        style_file.write_text(style)
     key = os.environ.get("PIXABAY_KEY")
     if key:
         try:
@@ -149,10 +180,13 @@ def fetch_music(payload: dict, day: str):
                              timeout=30)
             r.raise_for_status()
             hits = r.json().get("hits", [])
-            if hits:
-                download(hits[0]["audio"], out)
-                log.info("music from pixabay: %s", hits[0].get("tags"))
-                return str(out)
+            for hit in sorted(hits, key=lambda h: h.get("id") or 0):
+                try:
+                    download(hit["audio"], out)
+                    log.info("music from pixabay: %s", hit.get("tags"))
+                    return str(out)
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("pixabay track failed, trying next: %s", exc)
         except Exception as exc:  # noqa: BLE001
             log.warning("pixabay music failed: %s", exc)
     log.warning("no PIXABAY_KEY set or no hit; render will proceed without music")

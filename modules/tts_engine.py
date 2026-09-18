@@ -216,7 +216,7 @@ async def build_day_audio(day: str, payload: dict) -> dict:
     import mutagen
 
     profile = payload.get("audio_profile", {})
-    voice, rate = pick_voice(profile)
+    default_voice, rate = pick_voice(profile)
 
     day_dir = ASSET_DIR / day / "audio"
     day_dir.mkdir(parents=True, exist_ok=True)
@@ -231,24 +231,40 @@ async def build_day_audio(day: str, payload: dict) -> dict:
     scenes = payload["video_pipeline"]
     durations = {}
 
+    def scene_voice_for(scene):
+        """Per-scene override (scene.voice_profile) or the script default."""
+        sp = scene.get("voice_profile") or {}
+        if not sp:
+            return default_voice, rate
+        merged = dict(profile)
+        merged.update(sp)
+        return pick_voice(merged)
+
     async def synth_all():
         for scene in scenes:
-            sid = scene["scene_id"]
+            sid = str(scene["scene_id"])
+            s_voice, s_rate = scene_voice_for(scene)
             mp3 = day_dir / f"scene_{sid}.mp3"
-            if mp3.exists() and mp3.stat().st_size > 1024:
+            cached = mp3.exists() and mp3.stat().st_size > 1024
+            if cached and prev.get("scenes", {}).get(sid) != s_voice:
+                log.info("scene %s voice changed -> re-synthesizing", sid)
+                mp3.unlink()
+                cached = False
+            if cached:
                 durations[sid] = mutagen.File(str(mp3)).info.length
                 log.info("day=%s scene=%s cached (%.2fs)", day, sid,
                          durations[sid])
                 continue
-            await synth_scene(scene["narration_audio_text"], voice, rate, mp3)
+            await synth_scene(scene["narration_audio_text"], s_voice,
+                              s_rate, mp3)
             durations[sid] = mutagen.File(str(mp3)).info.length
             log.info("day=%s scene=%s voice=%s rate=%s dur=%.2fs",
-                     day, sid, voice, rate, durations[sid])
+                     day, sid, s_voice, s_rate, durations[sid])
 
-    # voice or speed changed -> old audio is stale
-    if prev and (prev.get("voice") != voice):
+    # default voice changed -> old audio is stale
+    if prev and (prev.get("voice") != default_voice):
         log.info("voice changed %s -> %s; re-synthesizing %s",
-                 prev.get("voice"), voice, day)
+                 prev.get("voice"), default_voice, day)
         for mp3 in day_dir.glob("scene_*.mp3"):
             mp3.unlink()
 
@@ -273,7 +289,10 @@ async def build_day_audio(day: str, payload: dict) -> dict:
                 mp3.unlink()
             await synth_all()
 
-    meta_file.write_text(json.dumps({"voice": voice, "rate": rate}))
+    meta_file.write_text(json.dumps({
+        "voice": default_voice, "rate": rate,
+        "scenes": {str(s["scene_id"]): scene_voice_for(s)[0]
+                   for s in scenes}}))
     return durations
 
 

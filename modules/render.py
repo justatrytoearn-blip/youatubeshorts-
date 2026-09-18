@@ -35,9 +35,10 @@ def probe_duration(path) -> float:
     return float(json.loads(out.stdout)["format"]["duration"])
 
 
-def ensure_clip(src: Path, duration: float, tmp: Path) -> Path:
+def ensure_clip(src: Path, duration: float, tmp: Path,
+                anim_sig: str = "") -> Path:
     """Normalize any stock clip: crop/scale to 1080x1920, loop if too short."""
-    out = tmp / f"{src.stem}_norm.mp4"
+    out = tmp / f"{src.stem}_{anim_sig or 'static'}_norm.mp4"
     vf = (
         f"scale={W}:{H}:force_original_aspect_ratio=increase,"
         f"crop={W}:{H},"
@@ -73,25 +74,44 @@ def _find_font() -> str:
     return ""
 
 
+def _motion_for(style: str, dur: float) -> str:
+    """Ken-Burns style motion chain applied after crop (subtle, no shake)."""
+    st = (style or "static").lower()
+    frames = max(int(dur * 30), 30)
+    if st == "zoom-in":
+        return (f",zoompan=z='min(zoom+0.0008,1.15)':d={frames}:"
+                "x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':s=1080x1920:fps=30")
+    if st == "zoom-out":
+        return (f",zoompan=z='if(lte(zoom,1.0),1.15,max(1.001,zoom-0.0008))':"
+                f"d={frames}:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+                "s=1080x1920:fps=30")
+    if st == "pan-up":
+        return (f",crop=1080:1920:0:'max(0,(ih-1920)*(1-t/{max(dur, .1):.2f}))'")
+    if st == "pan-down":
+        return (f",crop=1080:1920:0:'(ih-1920)*t/{max(dur, .1):.2f}'")
+    return ""
+
+
 def burn_scene(video: Path, audio: Path, text: str, tmp: Path, idx: int,
-               scene_duration: float) -> Path:
-    """Concat-ready scene: stock video + narration + big caption."""
+               scene_duration: float, motion: str = "static") -> Path:
+    """Concat-ready scene: stock video + narration + caption + motion."""
     out = tmp / f"scene_{idx}.mp4"
     safe = (text.replace("\\", "\\\\").replace(":", "\\:")
             .replace("'", "\\\u2019").replace("%", "\\%"))
     font = _find_font()
     font_opt = f"fontfile={font}:" if font else ""
-    # Bottom-third caption; timed over full scene.
     drawtext = (
         f"drawtext={font_opt}text='{safe}':"
         f"fontcolor=white:fontsize=64:borderw=4:bordercolor=black@0.8:"
         f"x=(w-text_w)/2:y=h-360:"
         f"box=1:boxcolor=black@0.35:boxborderw=22"
     )
+    motion_chain = _motion_for(motion, scene_duration)
     run([
         "ffmpeg", "-y",
         "-i", str(video), "-i", str(audio),
-        "-vf", drawtext,
+        "-vf", f"fps=30,scale=1080:1920:force_original_aspect_ratio=increase,"
+               f"crop=1080:1920,setsar=1{motion_chain},{drawtext}",
         "-map", "0:v", "-map", "1:a",
         "-t", f"{scene_duration:.2f}",
         "-c:v", "libx264", "-preset", "veryfast", "-crf", "20",
@@ -142,7 +162,11 @@ def render_day(day: str) -> Path:
     asset_map = json.loads((video_dir / "asset_map.json").read_text())
     music = a_dir / "music.mp3"
     music = music if music.exists() else None
-    gain = -18.0  # quiet bed under voice
+    prof = payload.get("audio_profile", {})
+    try:
+        gain = float(prof.get("music_volume_db", -18.0))
+    except (TypeError, ValueError):
+        gain = -18.0
 
     scene_files = []
     for scene in payload["video_pipeline"]:
@@ -156,9 +180,14 @@ def render_day(day: str) -> Path:
         # Scene length = max(planned, narration + padding). Narration is
         # never clipped: if TTS runs long the scene stretches to fit.
         target = max(float(scene["duration_seconds"]), narr_dur + 0.45)
-        norm = ensure_clip(clip, target, tmp)
+        anim = str(scene.get("animation_style",
+                             prof.get("animation_style", "static")))
+        norm = ensure_clip(clip, target, tmp, anim_sig=anim.replace("-", ""))
         burned = burn_scene(Path(asset_map[sid]["path"]), narration,
-                            scene["on_screen_text_overlay"], tmp, sid, target)
+                            scene["on_screen_text_overlay"], tmp, sid,
+                            target, motion=scene.get("animation_style",
+                                                     prof.get("animation_style",
+                                                              "static")))
         scene_files.append(burned)
 
     final_raw = concat(scene_files, tmp)

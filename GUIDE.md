@@ -336,6 +336,7 @@ This pipeline removes 100% of the manual editing labor so you can spend your ene
 | `quotaExceeded` on upload | YouTube default quota = ~6 uploads/day; wait for reset (midnight PT) |
 | `invalid_grant` / token expired | delete `config/token.json`, rerun upload, re-consent once |
 | `redirect_uri_mismatch` | your OAuth client must be type "Desktop app" exactly as section 4b |
+| `Error 403: access_denied` during consent | your app is in Testing mode: Google Cloud → APIs & Services → OAuth consent screen → Test users → **Add** the exact Gmail you sign in with. Note: test-mode tokens expire every 7 days — just tap Connect YouTube again when that happens (or "Publish app" to avoid re-connecting) |
 | Render fails on one scene | delete `output/assets/<day>/video/scene_<id>.mp4` + `asset_map.json`, rerun; fresh clip is fetched |
 | Video is silent | check `output/assets/<day>/audio/scene_1.mp3` exists; if not, rerun `tts_engine.py` |
 | Captions show wrong text | JSON `on_screen_text_overlay` contains `:` or `'` — escape or reword it |

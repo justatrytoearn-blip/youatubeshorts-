@@ -139,6 +139,20 @@ def api_settings():
             return jsonify({"error": "value required"}), 400
         set_env_key(key, value)
         return jsonify({"ok": True})
+    if key == "NARRATION_LANGUAGE":
+        import tts_engine
+        if value not in tts_engine.VOICE_CATALOG:
+            return jsonify({"error": "unsupported language"}), 400
+        set_env_key(key, value)
+        return jsonify({"ok": True})
+    if key == "DEFAULT_VOICE":
+        import tts_engine
+        all_v = [v for vs in tts_engine.VOICE_CATALOG.values()
+                 for v, _, _ in vs]
+        if value not in all_v:
+            return jsonify({"error": "unknown voice"}), 400
+        set_env_key(key, value)
+        return jsonify({"ok": True})
     if key not in ("OPENAI_API_KEY",):
         return jsonify({"error": "unknown setting"}), 400
     if not value:
@@ -155,6 +169,7 @@ def api_settings_get():
     default_base = ("https://generativelanguage.googleapis.com/v1beta/openai/"
                     if provider == "gemini" else "https://api.openai.com/v1")
     yid = (os.environ.get("YT_CLIENT_ID") or "").strip()
+    import tts_engine
     ysec = (os.environ.get("YT_CLIENT_SECRET") or "").strip()
     return jsonify({"openai_configured": has,
                     "masked": (k[:7] + "…" + k[-4:]) if has else "",
@@ -162,7 +177,11 @@ def api_settings_get():
                     "model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
                     "base_url": os.environ.get("OPENAI_BASE_URL", default_base),
                     "yt_id_masked": (yid[:10] + "…") if yid else "",
-                    "yt_secret_saved": bool(ysec)})
+                    "yt_secret_saved": bool(ysec),
+                    "narration_language": _narration_lang(),
+                    "languages": sorted(tts_engine.VOICE_CATALOG.keys()),
+                    "lang_names": tts_lang_names(),
+                    "default_voice": os.environ.get("DEFAULT_VOICE", "")})
 
 
 @app.get("/api/ai-models")
@@ -642,18 +661,31 @@ def extract_json(text: str) -> dict:
 
 
 # ------------------------------------------------------- AI generation ---
-def build_week_prompt(topic: str) -> str:
+LANG_NAMES = {"en": "English", "hi": "Hindi", "es": "Spanish",
+              "pt": "Portuguese", "fr": "French", "de": "German",
+              "id": "Indonesian", "ar": "Arabic", "bn": "Bengali",
+              "ta": "Tamil", "ru": "Russian", "ja": "Japanese"}
+
+
+def build_week_prompt(topic: str, language: str = "en") -> str:
+    lang = (language or _narration_lang() or "en").lower()
+    lang_line = ("\nIMPORTANT: Write ALL narration, the title, the "
+                 "description, on-screen text overlays and tags in "
+                 f"{LANG_NAMES.get(lang, 'English')}.\n" if lang != "en"
+                 else "")
     return (
         "You are an autonomous AI content director for viral YouTube Shorts in "
         "the dark psychology / mind facts niche.\n\n"
         f"Create a complete video production script about: {topic}\n\n"
+        + lang_line +
         "Return ONLY raw minified JSON (no markdown fences, no explanations) "
         "with EXACTLY this structure:\n"
         '{"selected_niche":"...","metadata":{"title":"under 100 chars, add '
         '#Shorts + 2 trending keywords","description":"1-2 sentences with a '
         'comment CTA and exactly 3 hashtags","tags":["5-7 search keywords"]},'
-        '"audio_profile":{"recommended_voice_style":"deep male authoritative '
-        'with urgent cinematic undertone","pace_multiplier":1.15,'
+        '        "audio_profile":{"recommended_voice_style":"deep male authoritative '
+        'with urgent cinematic undertone","language":"' + lang + '",'
+        '"pace_multiplier":1.15,'
         '"bg_music_vibe":"dark cinematic tension strings over low synth '
         'drone"},"video_pipeline":[{"scene_id":1,"narration_audio_text":'
         '"un-skippable psychological hook, max 15 words",'
@@ -680,7 +712,7 @@ def _ai_error_detail(resp) -> str:
         return ""
 
 
-def _ai_generate_script(topic: str) -> dict:
+def _ai_generate_script(topic: str, language: str = "en") -> dict:
     """Call an OpenAI-compatible chat API with plain requests (no SDK needed
     on Termux). Works with OpenAI, Google Gemini (free tier), and local LLM
     servers via OPENAI_BASE_URL."""
@@ -694,7 +726,8 @@ def _ai_generate_script(topic: str) -> dict:
     body = {"model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
             "temperature": 0.9,
             "messages": [{"role": "user",
-                          "content": build_week_prompt(topic)}]}
+                          "content": build_week_prompt(topic,
+                                                       language=language)}]}
 
     backoffs = [5, 15, 30, 60]
     last_err = "unknown error"
@@ -735,7 +768,8 @@ def _ai_generate_script(topic: str) -> dict:
                      "If this keeps happening, switch provider in Settings.")
 
 
-def _ai_worker(topic: str, days: list):
+def _ai_worker(topic: str, days: list, language: str = "en",
+               voice_id: str = ""):
     try:
         for i, day in enumerate(days, 1):
             ai = state["ai_job"]
@@ -743,8 +777,13 @@ def _ai_worker(topic: str, days: list):
             entry = next((e for e in ai["progress"] if e["day"] == day), None)
             try:
                 variant = topic if len(days) == 1 else f"{topic} (part {i})"
-                data = _ai_generate_script(variant)
-                (CONTENT_DIR / f"{day}.json").write_text(json.dumps(data, indent=1))
+                data = _ai_generate_script(variant, language=language)
+                prof = data.setdefault("audio_profile", {})
+                prof["language"] = language
+                if voice_id:
+                    prof["voice_id"] = voice_id
+                (CONTENT_DIR / f"{day}.json").write_text(
+                    json.dumps(data, indent=1))
                 if entry:
                     entry["status"] = "done"
                     entry["title"] = data.get("metadata", {}).get("title", "")
@@ -758,7 +797,8 @@ def _ai_worker(topic: str, days: list):
         save_state()
 
 
-def start_ai_job(topic: str, days: list):
+def start_ai_job(topic: str, days: list, language: str = "en",
+                 voice_id: str = ""):
     with _lock:
         if state["ai_job"].get("running"):
             return False, "another AI generation is running"
@@ -770,8 +810,27 @@ def start_ai_job(topic: str, days: list):
             "progress": [{"day": d, "status": "pending"} for d in days],
         }
         save_state()
-    threading.Thread(target=_ai_worker, args=(topic, days), daemon=True).start()
+    threading.Thread(target=_ai_worker,
+                     args=(topic, days, language, voice_id),
+                     daemon=True).start()
     return True, "started"
+
+
+@app.get("/api/voices")
+def api_voices():
+    """Voice catalog grouped by language for the console dropdowns."""
+    import tts_engine
+    return jsonify(tts_engine.voices_payload())
+
+
+def _narration_lang() -> str:
+    return (os.environ.get("NARRATION_LANGUAGE") or "en").strip().lower()
+
+
+def tts_lang_names() -> dict:
+    import tts_engine
+    return {lang: (LANG_NAMES.get(lang, lang))
+            for lang in tts_engine.VOICE_CATALOG}
 
 
 @app.post("/api/ai-generate")
@@ -786,11 +845,16 @@ def api_ai_generate():
     days = [d for d in (safe_key(x) for x in days) if d]
     if not days:
         return jsonify({"error": "pick at least one day"}), 400
+    lang = str(body.get("language") or _narration_lang() or "en").lower()
+    if lang not in ("en", "hi", "es", "pt", "fr", "de", "id", "ar", "bn",
+                    "ta", "ru", "ja"):
+        return jsonify({"error": "unsupported language"}), 400
+    voice_id = str(body.get("voice_id") or "").strip() or None
     if not (os.environ.get("OPENAI_API_KEY") or "").strip() \
             or "REPLACE" in os.environ.get("OPENAI_API_KEY", ""):
         return jsonify({"error": "add OPENAI_API_KEY to config/.env first "
                                  "(console Settings tab)"}), 400
-    ok, msg = start_ai_job(topic, days)
+    ok, msg = start_ai_job(topic, days, language=lang, voice_id=voice_id)
     return (jsonify({"ok": ok, "msg": msg}), 200 if ok else 409)
 
 

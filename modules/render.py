@@ -53,15 +53,37 @@ def ensure_clip(src: Path, duration: float, tmp: Path) -> Path:
     return out
 
 
+def _find_font() -> str:
+    """Pick a font that supports non-Latin captions when available."""
+    import os
+    for cand in (
+            os.environ.get("CAPTION_FONT", ""),
+            "/system/fonts/NotoSansCJK-Regular.ttc",
+            "/system/fonts/NotoSansDevanagari-Regular.ttf",
+            "/system/fonts/NotoSansArabic-Regular.ttf",
+            "/system/fonts/NotoSansBengali-Regular.ttf",
+            "/system/fonts/NotoSansTamil-Regular.ttf",
+            "/system/fonts/NotoSansThai-Regular.ttf",
+            "/system/fonts/DroidSansFallback.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+    ):
+        if cand and Path(cand).exists():
+            return cand
+    return ""
+
+
 def burn_scene(video: Path, audio: Path, text: str, tmp: Path, idx: int,
                scene_duration: float) -> Path:
     """Concat-ready scene: stock video + narration + big caption."""
     out = tmp / f"scene_{idx}.mp4"
     safe = (text.replace("\\", "\\\\").replace(":", "\\:")
             .replace("'", "\\\u2019").replace("%", "\\%"))
-    # Bottom-third caption, wrapped feel via fontsize; timed over full scene.
+    font = _find_font()
+    font_opt = f"fontfile={font}:" if font else ""
+    # Bottom-third caption; timed over full scene.
     drawtext = (
-        f"drawtext=text='{safe}':"
+        f"drawtext={font_opt}text='{safe}':"
         f"fontcolor=white:fontsize=64:borderw=4:bordercolor=black@0.8:"
         f"x=(w-text_w)/2:y=h-360:"
         f"box=1:boxcolor=black@0.35:boxborderw=22"

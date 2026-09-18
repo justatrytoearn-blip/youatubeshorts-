@@ -134,6 +134,17 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
   <label class="stlabel">Video topic</label>
   <input type="text" id="sTopic" placeholder="e.g. signs someone is secretly lying to you">
 
+  <div class="two" style="margin-top:10px">
+    <div>
+      <label class="stlabel">Narration language</label>
+      <select id="sLang"></select>
+    </div>
+    <div>
+      <label class="stlabel">Voice for these videos</label>
+      <select id="sVoice"></select>
+    </div>
+  </div>
+
   <label class="stlabel">Generate for</label>
   <div class="daypills" id="dayPills"></div>
 
@@ -235,6 +246,13 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
     <button onclick="saveSetting('YT_CLIENT_SECRET',$('#setYtSec').value.trim())">Save secret</button>
   </div>
   <p style="color:var(--mut);font-size:12.5px;margin-top:10px">One-time setup in Google Cloud Console: create project → enable <b>YouTube Data API v3</b> → OAuth consent screen (External, add yourself as test user) → Credentials → <b>OAuth client ID → Desktop app</b>. Full walkthrough: GUIDE.md §4b. Keys stay on this device.</p>
+
+  <h2 style="margin-top:18px">🗣 Default voice & language</h2>
+  <p id="voiceSetStatus" style="font-size:13px;color:var(--mut);margin-bottom:10px"></p>
+  <label class="stlabel">Default narration language</label>
+  <select id="setLang" onchange="saveSetting('NARRATION_LANGUAGE',this.value)"></select>
+  <label class="stlabel">Default voice (used when a script doesn't pick one)</label>
+  <select id="setVoice" onchange="saveSetting('DEFAULT_VOICE',this.value)"></select>
 </div>
 </div><!-- /view-set -->
 
@@ -356,7 +374,7 @@ function showTab(t){
   document.body.dataset.tab=t;
   ["dash","studio","stats","set"].forEach(v=>$("#view-"+v).style.display=(t===v)?"":"none");
   ["dash","studio","stats","set"].forEach(v=>$("#tab-"+v).classList.toggle("active",t===v));
-  if(t==="studio"){renderPills();pollAI()}
+  if(t==="studio"){renderPills();pollAI();loadVoices()}
   if(t==="stats")loadStats();
   if(t==="set")loadSettings();
 }
@@ -368,18 +386,6 @@ function renderPills(){
   el.dataset.init=1;
 }
 function selDays(){return [...document.querySelectorAll("#dayPills .pill.on")].map(b=>b.dataset.day)}
-async function aiGenerate(){
-  const topic=$("#sTopic").value.trim();
-  const days=selDays();
-  if(!topic){toast("Enter a topic first",true);return}
-  if(!days.length){toast("Pick at least one day",true);return}
-  const r=await fetch("/api/ai-generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({topic,days})});
-  const j=await r.json();
-  if(!j.ok){toast(j.msg||j.error||"Failed",true);return}
-  toast("Generating "+days.length+" script(s)…");
-  $("#aiProgress").style.display="block";
-  pollAI();
-}
 let aiTimer=null;
 async function pollAI(){
   const r=await fetch("/api/state");const s=await r.json();
@@ -392,6 +398,46 @@ async function pollAI(){
     (!ai.running?`<div style="margin-top:8px;font-size:13px">${ai.progress.every(p=>p.status==="done")?'✅ All scripts ready — check the <a href="#" onclick="showTab(\'dash\');return false" style="color:var(--info)">Dashboard</a> and hit Build.':'Some days failed — fix the error above or tap Generate again.'}</div>`:"");
   clearTimeout(aiTimer);
   if(ai.running)aiTimer=setTimeout(pollAI,2500);
+}
+let VOICES=null;
+async function loadVoices(){
+  if(VOICES)return;
+  VOICES=await (await fetch("/api/voices")).json();
+  const langs=VOICES.languages||{};
+  const sLang=$("#sLang"),sVoice=$("#sVoice");
+  if(sLang&&!sLang.dataset.init){
+    sLang.innerHTML=Object.keys(langs).map(l=>`<option value="${l}">${{en:"English",hi:"Hindi",es:"Spanish",pt:"Portuguese",fr:"French",de:"German",id:"Indonesian",ar:"Arabic",bn:"Bengali",ta:"Tamil",ru:"Russian",ja:"Japanese"}[l]||l}</option>`).join("");
+    sLang.dataset.init=1;
+    sLang.onchange=()=>fillVoiceOpts(sLang.value);
+  }
+  fillVoiceOpts(sLang?sLang.value:"en");
+}
+function fillVoiceOpts(lang){
+  const sVoice=$("#sVoice");
+  if(!sVoice||!VOICES)return;
+  const vs=(VOICES.languages||{})[lang]||[];
+  const grp={male:[],female:[],child:[]};
+  vs.forEach(v=>(grp[v.gender]||grp.male).push(v));
+  sVoice.innerHTML=["male","female","child"].filter(g=>grp[g].length)
+    .map(g=>`<optgroup label="${g[0].toUpperCase()+g.slice(1)} voices">`+
+      grp[g].map(v=>`<option value="${v.id}">${v.label.replace(/^(US|UK) • /,"")}</option>`).join("")+"</optgroup>").join("");
+}
+async function aiGenerate(){
+  const topic=$("#sTopic").value.trim();
+  const days=selDays();
+  if(!topic){toast("Enter a topic first",true);return}
+  if(!days.length){toast("Pick at least one day",true);return}
+  const lang=$("#sLang")?$("#sLang").value:null;
+  const voice=$("#sVoice")?$("#sVoice").value:null;
+  const body={topic,days};
+  if(lang)body.language=lang;
+  if(voice)body.voice_id=voice;
+  const r=await fetch("/api/ai-generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  const j=await r.json();
+  if(!j.ok){toast(j.msg||j.error||"Failed",true);return}
+  toast("Generating "+days.length+" script(s)…");
+  $("#aiProgress").style.display="block";
+  pollAI();
 }
 const HINTS={
  openai:{k:'Get a key at platform.openai.com/api-keys → "Create new secret key". Requires prepaid credit at platform.openai.com/settings/organization/billing (~$0.01/week of scripts).',u:'https://platform.openai.com/api-keys'},
@@ -425,6 +471,18 @@ async function loadSettings(){
   if($("#setYtId"))$("#setYtId").placeholder=j.yt_id_masked?("saved: "+j.yt_id_masked):"xxxxx.apps.googleusercontent.com";
   if($("#setYtSec"))$("#setYtSec").placeholder=j.yt_secret_saved?"saved ✓ — paste to replace":"GOCSPX-...";
   if($("#ytSetStatus"))$("#ytSetStatus").innerHTML=(j.yt_id_masked&&j.yt_secret_saved)?'✅ YouTube app keys saved — go to the <a href="#" onclick="showTab(\'stats\');return false" style="color:var(--info)">Stats tab</a> and tap Connect YouTube.':'⚠ YouTube keys not fully saved yet (needed for upload + stats).';
+  if($("#setLang")&&!$("#setLang").dataset.init){
+    await loadVoices();
+    const langs=(VOICES&&VOICES.languages)||{};
+    $("#setLang").innerHTML=Object.keys(langs).map(l=>`<option value="${l}" ${l===j.narration_language?"selected":""}>${{en:"English",hi:"Hindi",es:"Spanish",pt:"Portuguese",fr:"French",de:"German",id:"Indonesian",ar:"Arabic",bn:"Bengali",ta:"Tamil",ru:"Russian",ja:"Japanese"}[l]||l}</option>`).join("");
+    $("#setLang").dataset.init=1;
+  }
+  if($("#setLang")&&$("#setLang").dataset.init){
+    const langs=(VOICES&&VOICES.languages)||{};
+    const vs=langs[j.narration_language]||langs.en||[];
+    $("#setVoice").innerHTML=vs.map(v=>`<option value="${v.id}" ${v.id===j.default_voice?"selected":""}>${v.label}</option>`).join("");
+    if($("#voiceSetStatus"))$("#voiceSetStatus").textContent="Applies to AI Studio generations and scripts without their own voice. Each script can override in the ✎ editor.";
+  }
   $("#setStatus").innerHTML=(j.openai_configured?`✅ Key configured (${esc(j.masked)}) · provider: <b>${esc(p)}</b> · model: <b>${esc(j.model||"")}</b>`:'⚠ No API key yet — pick a provider above, paste the key, Save.')
     +(j.provider==="gemini"&&!j.openai_configured?' <span style="color:var(--warn)">Gemini selected but no key saved yet.</span>':"");
 }
@@ -552,18 +610,48 @@ async function openEditor(key){
 function renderEditor(key){
   $("#mTitle").textContent="Edit "+key;
   const m=ED.metadata||{},a=ED.audio_profile||{};
+  const lang=a.language||"en";
+  const allV=(VOICES&&VOICES.languages)||{};
+  const vlist=allV[lang]||allV.en||[];
+  const grp={male:[],female:[],child:[]};
+  vlist.forEach(v=>(grp[v.gender]||grp.male).push(v));
+  const opts=gid=>["male","female","child"].filter(g=>grp[g].length)
+    .map(g=>`<optgroup label="${g[0].toUpperCase()+g.slice(1)} voices">`+
+      grp[g].map(v=>`<option value="${v.id}" ${v.id===gid?"selected":""}>${v.label.replace(/^(US|UK) • /,"")}</option>`).join("")+"</optgroup>").join("");
   $("#mBody").innerHTML=`
   <label style="font-size:11.5px;color:var(--mut)">TITLE</label>
   <input type="text" id="eTitle" value="${esc(m.title||"")}" maxlength="100">
   <label style="font-size:11.5px;color:var(--mut);display:block;margin-top:10px">DESCRIPTION</label>
   <textarea id="eDesc" style="min-height:60px">${esc(m.description||"")}</textarea>
   <div class="two" style="margin-top:10px">
-    <div><label style="font-size:11.5px;color:var(--mut)">VOICE STYLE</label><input type="text" id="eVoice" value="${esc(a.recommended_voice_style||"")}"></div>
+    <div><label style="font-size:11.5px;color:var(--mut)">LANGUAGE</label>
+      <select id="eLang" onchange="editorLangChanged()">${Object.keys(allV).sort().map(l=>`<option value="${l}" ${l===lang?"selected":""}>${{en:"English",hi:"Hindi",es:"Spanish",pt:"Portuguese",fr:"French",de:"German",id:"Indonesian",ar:"Arabic",bn:"Bengali",ta:"Tamil",ru:"Russian",ja:"Japanese"}[l]||l}</option>`).join("")}</select></div>
+    <div><label style="font-size:11.5px;color:var(--mut)">VOICE</label>
+      <select id="eVoiceSel">${opts(a.voice_id||(vlist[0]&&vlist[0].id)||"")}</select></div>
+  </div>
+  <div class="two" style="margin-top:10px">
+    <div><label style="font-size:11.5px;color:var(--mut)">SPEED (pace multiplier)</label>
+      <select id="ePace">${["1.0","1.1","1.15","1.2","1.25"].map(p=>`<option value="${p}" ${String(a.pace_multiplier||"1.0")===p?"selected":""}>${p==="1.0"?"1.0 — normal":p==="1.25"?"1.25 — fastest":"1.15 — punchy (recommended)"}</option>`).join("")}</select></div>
+    <div><label style="font-size:11.5px;color:var(--mut)">TARGET LENGTH (seconds, optional)</label>
+      <input type="number" id="eTarget" min="30" max="60" value="${a.target_seconds||""}" placeholder="e.g. 50"></div>
+  </div>
+  <div class="two" style="margin-top:10px">
     <div><label style="font-size:11.5px;color:var(--mut)">MUSIC VIBE</label><input type="text" id="eMusic" value="${esc(a.bg_music_vibe||"")}"></div>
+    <div></div>
   </div>
   <div id="scenes" style="margin-top:14px">${(ED.video_pipeline||[]).map((s,i)=>sceneHtml(s,i)).join("")}</div>
   <button class="btn2 btn-sm" style="margin-top:4px" onclick="addScene()">+ Add scene</button>`;
   $("#modal").classList.add("open");
+}
+function editorLangChanged(){
+  const lang=$("#eLang").value;
+  const allV=(VOICES&&VOICES.languages)||{};
+  const vlist=allV[lang]||[];
+  const grp={male:[],female:[],child:[]};
+  vlist.forEach(v=>(grp[v.gender]||grp.male).push(v));
+  $("#eVoiceSel").innerHTML=["male","female","child"].filter(g=>grp[g].length)
+    .map(g=>`<optgroup label="${g[0].toUpperCase()+g.slice(1)} voices">`+
+      grp[g].map(v=>`<option value="${v.id}">${v.label.replace(/^(US|UK) • /,"")}</option>`).join("")+"</optgroup>").join("");
 }
 function sceneHtml(s,i){return `<div class="scene" data-i="${i}">
   <div class="sh"><b style="font-size:12.5px;color:var(--mut)">SCENE ${i+1}</b><button class="btn2 btn-sm" onclick="this.closest('.scene').remove();renum()">✕</button></div>
@@ -580,8 +668,12 @@ async function saveScript(){
   ED.metadata.title=$("#eTitle").value;
   ED.metadata.description=$("#eDesc").value;
   ED.audio_profile=ED.audio_profile||{};
-  ED.audio_profile.recommended_voice_style=$("#eVoice").value;
-  ED.audio_profile.bg_music_vibe=$("#eMusic").value;
+  if($("#eLang"))ED.audio_profile.language=$("#eLang").value;
+  if($("#eVoiceSel"))ED.audio_profile.voice_id=$("#eVoiceSel").value;
+  if($("#ePace"))ED.audio_profile.pace_multiplier=parseFloat($("#ePace").value)||1.0;
+  const tgt=$("#eTarget")?parseFloat($("#eTarget").value):0;
+  if(tgt&&tgt>=30)ED.audio_profile.target_seconds=tgt;else delete ED.audio_profile.target_seconds;
+  ED.audio_profile.bg_music_vibe=$("#eMusic")?$("#eMusic").value:ED.audio_profile.bg_music_vibe||"";
   ED.video_pipeline=[...document.querySelectorAll("#scenes .scene")].map((el,i)=>({
     scene_id:i+1,
     narration_audio_text:el.querySelector(".s-narr").value.trim(),

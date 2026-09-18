@@ -50,6 +50,17 @@ def check_python_deps():
         except ImportError:
             line(FAIL, f"python package missing: {pip_name}",
                  "python3 -m pip install -r requirements.txt")
+    # broken compiled wheels (e.g. cryptography dlopen failures on Termux)
+    import sys
+    sys.path.insert(0, str(ROOT / "modules"))
+    try:
+        import yt_client  # noqa: F401
+        line(OK, "youtube client (pure python, no google libs) imports")
+    except Exception as exc:  # noqa: BLE001
+        line(FAIL, f"youtube client failed to import: {str(exc)[:80]}",
+             "python3 -m pip uninstall -y google-api-python-client "
+             "google-auth-oauthlib cryptography  then reinstall "
+             "requirements.txt")
 
 
 def check_env():

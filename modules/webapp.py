@@ -134,6 +134,11 @@ def api_settings():
             return jsonify({"error": "value required"}), 400
         set_env_key(key, value)
         return jsonify({"ok": True})
+    if key in ("YT_CLIENT_ID", "YT_CLIENT_SECRET"):
+        if not value:
+            return jsonify({"error": "value required"}), 400
+        set_env_key(key, value)
+        return jsonify({"ok": True})
     if key not in ("OPENAI_API_KEY",):
         return jsonify({"error": "unknown setting"}), 400
     if not value:
@@ -149,11 +154,15 @@ def api_settings_get():
     provider = os.environ.get("AI_PROVIDER", "openai")
     default_base = ("https://generativelanguage.googleapis.com/v1beta/openai/"
                     if provider == "gemini" else "https://api.openai.com/v1")
+    yid = (os.environ.get("YT_CLIENT_ID") or "").strip()
+    ysec = (os.environ.get("YT_CLIENT_SECRET") or "").strip()
     return jsonify({"openai_configured": has,
                     "masked": (k[:7] + "…" + k[-4:]) if has else "",
                     "provider": provider,
                     "model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
-                    "base_url": os.environ.get("OPENAI_BASE_URL", default_base)})
+                    "base_url": os.environ.get("OPENAI_BASE_URL", default_base),
+                    "yt_id_masked": (yid[:10] + "…") if yid else "",
+                    "yt_secret_saved": bool(ysec)})
 
 
 @app.get("/api/ai-models")
@@ -301,8 +310,15 @@ def _worker(day, upload):
         ("render", [sys.executable, MOD_DIR / "render.py", day]),
     ]
     if upload and os.environ.get("DRY_RUN", "false").lower() != "true":
-        steps.append(("upload", [sys.executable, MOD_DIR / "upload.py",
-                                 VIDEO_DIR / f"{day}_final.mp4", day]))
+        if not yt_client.creds_available():
+            job["need_consent"] = True
+            _log(day, "YouTube not connected yet - video built, upload "
+                      "skipped.")
+            _log(day, "Open the Stats tab, tap 'Connect YouTube', then run "
+                      "Build+Upload again.")
+        else:
+            steps.append(("upload", [sys.executable, MOD_DIR / "upload.py",
+                                     VIDEO_DIR / f"{day}_final.mp4", day]))
     else:
         _log(day, "upload skipped (DRY_RUN or build-only request)")
     try:
@@ -409,6 +425,7 @@ def _day_info(key):
         if (VIDEO_DIR / f"{key}_final.mp4").exists() else None,
         "url": job.get("url"),
         "upload": job.get("upload"),
+        "need_consent": job.get("need_consent"),
     }
 
 
@@ -459,11 +476,26 @@ def api_delete_day(day):
 
 
 # -------------------------------------------------------- YouTube extras ---
-def get_youtube_service():
-    """Reuse upload.py's OAuth flow (its scopes cover read + upload)."""
-    sys.path.insert(0, str(MOD_DIR))
-    import upload as yt_upload
-    return yt_upload.get_service()
+sys.path.insert(0, str(MOD_DIR))
+import yt_client  # noqa: E402
+
+
+def _yt_err(exc: Exception) -> str:
+    msg = str(exc)
+    if "YT_CLIENT" in msg or "keys missing" in msg:
+        return "YouTube app keys missing. Add YT_CLIENT_ID and " \
+               "YT_CLIENT_SECRET in the Settings tab."
+    if "not connected yet" in msg:
+        return "YouTube not connected yet. Tap Connect in the Stats tab " \
+               "and approve the Google consent link."
+    return msg[:200]
+
+
+def _extract_vid(text: str) -> str:
+    import re
+    m = re.search(r"(?:shorts/|v=|be/|videos/|video_id=|^)([A-Za-z0-9_-]{6,20})",
+                  (text or "").strip())
+    return m.group(1) if m else ""
 
 
 def _dur_secs(iso: str) -> int:
@@ -475,22 +507,57 @@ def _dur_secs(iso: str) -> int:
     return h * 3600 + mi * 60 + s
 
 
-def pick_video_id(item: dict) -> str:
-    vid = (item.get("contentDetails", {}).get("upload", {}).get("videoId")
-           or (item.get("id").get("videoId") if isinstance(item.get("id"), dict)
-               else item.get("id")))
-    return vid if isinstance(vid, str) else ""
+def _track(vid: str, title: str):
+    if not any(h.get("url", "").endswith(vid) for h in state["history"]):
+        state["history"].insert(0, {
+            "day": (title or vid)[:40],
+            "url": "https://youtube.com/shorts/" + vid,
+            "when": datetime.now().isoformat(timespec="seconds"),
+            "title": title or vid})
+        del state["history"][24:]
+        save_state()
+
+
+@app.get("/api/yt/connect-start")
+def api_yt_connect_start():
+    try:
+        return jsonify({"ok": True, "url": yt_client.consent_url()})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": _yt_err(exc)}), 200
+
+
+@app.post("/api/yt/connect-finish")
+def api_yt_connect_finish():
+    body = request.get_json(force=True, silent=True) or {}
+    url = str(body.get("url", ""))
+    try:
+        code = yt_client.parse_redirect(url)
+        if not code:
+            raise yt_client.YouTubeError(
+                "no ?code= in that link. Copy the FULL address-bar URL "
+                "from the page Google sent you to.")
+        yt_client.finish_connect(url)
+        return jsonify({"ok": True})
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"ok": False, "error": _yt_err(exc)}), 200
+
+
+@app.get("/api/yt/status")
+def api_yt_status():
+    connected = False
+    try:
+        connected = yt_client.creds_available() and bool(
+            yt_client.get_access_token())
+    except Exception:
+        pass
+    keys = bool((os.environ.get("YT_CLIENT_ID") or "").strip()
+                and "REPLACE" not in os.environ.get("YT_CLIENT_ID", ""))
+    return jsonify({"connected": connected, "keys_saved": keys})
 
 
 @app.get("/api/yt/analytics")
 def api_yt_analytics():
     """Views/likes/comments for every tracked video (history + channel)."""
-    try:
-        yt = get_youtube_service()
-    except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": "YouTube connection not ready: " + str(exc)[:160] +
-                                 ". Run one Build+Upload first and approve the "
-                                 "Google consent link."}), 200
     try:
         ids, seen = [], set()
         for h in state.get("history", []):
@@ -498,25 +565,17 @@ def api_yt_analytics():
             if vid and vid not in seen:
                 seen.add(vid)
                 ids.append(vid)
-        try:
-            items = yt.search().list(part="id", forMine=True, order="date",
-                                     maxResults=25, type="video") \
-                .execute().get("items", [])
-            for it in items:
-                vid = pick_video_id(it)
-                if vid and vid not in seen:
-                    seen.add(vid)
-                    ids.append(vid)
-        except Exception:
-            pass   # search may be unavailable; history tracking still works
+        for it in yt_client.list_my_videos(25):
+            vid = it.get("id", {}).get("videoId", "")
+            if vid and vid not in seen:
+                seen.add(vid)
+                ids.append(vid)
         if not ids:
             return jsonify({"videos": [],
                             "totals": {"views": 0, "likes": 0,
                                        "comments": 0}}), 200
-        resp = yt.videos().list(part="snippet,statistics,contentDetails",
-                                id=",".join(ids[:50])).execute()
         videos, totals = [], {"views": 0, "likes": 0, "comments": 0}
-        for it in resp.get("items", []):
+        for it in yt_client.get_videos(ids[:50]):
             sn, st = it.get("snippet", {}), it.get("statistics", {})
             dur = it.get("contentDetails", {}).get("duration", "")
             views = int(st.get("viewCount", 0))
@@ -525,19 +584,7 @@ def api_yt_analytics():
             totals["views"] += views
             totals["likes"] += likes
             totals["comments"] += comments
-            top = []
-            if comments:
-                try:
-                    tr = yt.commentThreads().list(
-                        part="snippet", videoId=it["id"], order="relevance",
-                        maxResults=3).execute()
-                    for c in tr.get("items", []):
-                        cs = c["snippet"]["topLevelComment"]["snippet"]
-                        top.append({"author": cs.get("authorDisplayName", ""),
-                                    "text": (cs.get("textOriginal", "")
-                                             or cs.get("textDisplay", ""))[:160]})
-                except Exception:
-                    pass
+            top = yt_client.top_comments(it["id"], 3) if comments else []
             videos.append({"id": it["id"], "title": sn.get("title", ""),
                            "published": sn.get("publishedAt", "")[:16]
                            .replace("T", " "),
@@ -547,33 +594,25 @@ def api_yt_analytics():
                                      "comments": comments}})
         return jsonify({"videos": videos, "totals": totals}), 200
     except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": f"YouTube API error: {exc}"}), 200
+        return jsonify({"error": "YouTube API error: " + _yt_err(exc)}), 200
 
 
 @app.post("/api/yt/direct-upload")
 def api_yt_direct_upload():
-    """Track an already-uploaded video by its YouTube ID."""
-    vid = str((request.get_json(force=True, silent=True) or {})
+    """Track an already-uploaded video by its YouTube ID or link."""
+    raw = str((request.get_json(force=True, silent=True) or {})
               .get("id", "")).strip()
-    if not vid or not vid.isalnum() or len(vid) > 20:
+    vid = _extract_vid(raw)
+    if not vid:
         return jsonify({"error": "that does not look like a video ID"}), 400
     try:
-        yt = get_youtube_service()
-        items = yt.videos().list(part="snippet", id=vid).execute() \
-            .get("items", [])
+        items = yt_client.get_video(vid)
         if not items:
             return jsonify({"error": "video not found (wrong ID?)"}), 200
     except Exception as exc:  # noqa: BLE001
-        return jsonify({"error": "YouTube connection not ready: "
-                                 + str(exc)[:160]}), 200
-    sn = items[0].get("snippet", {})
-    state["history"].insert(0, {
-        "day": (sn.get("title", vid) or vid)[:40],
-        "url": "https://youtube.com/shorts/" + vid,
-        "when": datetime.now().isoformat(timespec="seconds"),
-        "title": sn.get("title", "")})
-    del state["history"][24:]
-    save_state()
+        return jsonify({"error": "YouTube error: " + _yt_err(exc)}), 200
+    sn = (items or {}).get("snippet", {})
+    _track(vid, sn.get("title", ""))
     return jsonify({"ok": True, "id": vid})
 
 

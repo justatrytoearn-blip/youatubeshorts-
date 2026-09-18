@@ -164,6 +164,23 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
       <button class="btn2 btn-sm" onclick="directUpload()">➕ Track by video ID</button>
     </div>
   </div>
+  <div id="ytConnect" style="display:none;background:#332a10;border:1px solid var(--warn);border-radius:12px;padding:12px;margin-bottom:10px;font-size:13.5px">
+    <b style="color:var(--warn)">YouTube not connected.</b>
+    <span id="ytConnHint" style="color:var(--mut)">Connect once — then uploads and stats run without any browser steps.</span>
+    <button class="btn-ok btn-sm" style="margin-left:8px" onclick="ytConnectStart()">Connect YouTube</button>
+    <div id="ytConnBox" style="display:none;margin-top:10px">
+      <div class="row">
+        <a id="ytConsentLink" href="#" target="_blank" class="btn2 btn-sm" style="text-decoration:none;padding:7px 12px">1. Open Google consent ↗</a>
+        <button class="btn2 btn-sm" onclick="copyConsent()">Copy link</button>
+      </div>
+      <label class="stlabel" style="margin-top:10px">2. After tapping Allow, the browser goes to a page that fails to load — that is normal. Copy the FULL address-bar URL and paste it here:</label>
+      <div class="row">
+        <input type="text" id="ytPaste" placeholder="http://localhost:1/?code=...&scope=..." style="flex:1;min-width:220px">
+        <button onclick="ytConnectFinish()">3. Finish connect</button>
+      </div>
+    </div>
+    <p id="ytConnMsg" style="margin-top:8px"></p>
+  </div>
   <div id="statChips" class="chips" style="margin-bottom:10px"></div>
   <div id="statErr" style="color:var(--warn);font-size:13px;margin-bottom:8px"></div>
   <div id="statList"></div>
@@ -204,6 +221,20 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
   </div>
   <p id="setStatus" style="font-size:13px;color:var(--mut);margin-top:8px"></p>
   <p id="keyHint" style="color:var(--mut);font-size:12.5px;margin-top:10px"></p>
+
+  <h2 style="margin-top:18px">▶ YouTube app keys (for upload + stats)</h2>
+  <p id="ytSetStatus" style="font-size:13px;color:var(--mut);margin-bottom:10px"></p>
+  <label class="stlabel">Client ID</label>
+  <div class="row">
+    <input type="text" id="setYtId" placeholder="xxxxx.apps.googleusercontent.com" style="flex:1;min-width:220px">
+    <button onclick="saveSetting('YT_CLIENT_ID',$('#setYtId').value.trim())">Save ID</button>
+  </div>
+  <label class="stlabel">Client secret</label>
+  <div class="row">
+    <input type="password" id="setYtSec" placeholder="GOCSPX-..." style="flex:1;min-width:220px">
+    <button onclick="saveSetting('YT_CLIENT_SECRET',$('#setYtSec').value.trim())">Save secret</button>
+  </div>
+  <p style="color:var(--mut);font-size:12.5px;margin-top:10px">One-time setup in Google Cloud Console: create project → enable <b>YouTube Data API v3</b> → OAuth consent screen (External, add yourself as test user) → Credentials → <b>OAuth client ID → Desktop app</b>. Full walkthrough: GUIDE.md §4b. Keys stay on this device.</p>
 </div>
 </div><!-- /view-set -->
 
@@ -283,6 +314,7 @@ function dcard(d){
       <button class="btn2" onclick="openEditor('${d.key}')">✎</button>
     </div>
     ${d.video||d.url?`<div class="dbtns">${d.video?`<button class="btn2" onclick="watch('${d.key}')">Watch</button>`:""}${d.url?`<button class="btn2" onclick="window.open('${d.url}','_blank')">YouTube ↗</button>`:""}</div>`:""}
+    ${d.need_consent?`<div style="background:#332a10;border:1px solid var(--warn);border-radius:10px;padding:8px 10px;font-size:12.5px;color:var(--warn)">Video built — YouTube not connected. <a href="#" onclick="showTab('stats');return false" style="color:var(--info)">Connect YouTube</a>, then Build+Upload again.</div>`:""}
     ${d.error?`<div style="color:var(--err);font-size:12.5px">${esc(d.error).slice(0,140)}</div>`:""}
   </div>`;
 }
@@ -390,6 +422,9 @@ async function loadSettings(){
   applyHints(p);
   if($("#setBase"))$("#setBase").value=j.base_url||"";
   if($("#setModel"))$("#setModel").value=j.model||"";
+  if($("#setYtId"))$("#setYtId").placeholder=j.yt_id_masked?("saved: "+j.yt_id_masked):"xxxxx.apps.googleusercontent.com";
+  if($("#setYtSec"))$("#setYtSec").placeholder=j.yt_secret_saved?"saved ✓ — paste to replace":"GOCSPX-...";
+  if($("#ytSetStatus"))$("#ytSetStatus").innerHTML=(j.yt_id_masked&&j.yt_secret_saved)?'✅ YouTube app keys saved — go to the <a href="#" onclick="showTab(\'stats\');return false" style="color:var(--info)">Stats tab</a> and tap Connect YouTube.':'⚠ YouTube keys not fully saved yet (needed for upload + stats).';
   $("#setStatus").innerHTML=(j.openai_configured?`✅ Key configured (${esc(j.masked)}) · provider: <b>${esc(p)}</b> · model: <b>${esc(j.model||"")}</b>`:'⚠ No API key yet — pick a provider above, paste the key, Save.')
     +(j.provider==="gemini"&&!j.openai_configured?' <span style="color:var(--warn)">Gemini selected but no key saved yet.</span>':"");
 }
@@ -426,10 +461,32 @@ async function saveKey(){
   else toast(j.error||"Save failed",true);
 }
 let statTimer=null;
+async function ytConnectStart(){
+  const r=await fetch("/api/yt/connect-start");const j=await r.json();
+  if(!j.ok){$("#ytConnMsg").innerHTML='<span style="color:var(--err)">'+esc(j.error||"failed")+'</span>';return}
+  $("#ytConsentLink").href=j.url;
+  $("#ytConnBox").style.display="block";
+  window.open(j.url,"_blank");
+}
+function copyConsent(){
+  navigator.clipboard.writeText($("#ytConsentLink").href).then(()=>toast("Link copied — paste it in your browser"));
+}
+async function ytConnectFinish(){
+  const u=$("#ytPaste").value.trim();
+  if(!u){toast("Paste the redirect URL first",true);return}
+  const r=await fetch("/api/yt/connect-finish",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({url:u})});
+  const j=await r.json();
+  if(j.ok){$("#ytConnMsg").innerHTML='<b style="color:var(--ok)">✅ YouTube connected.</b> You can upload and track now.';$("#ytConnect").style.display="none";loadStats(true)}
+  else $("#ytConnMsg").innerHTML='<span style="color:var(--err)">'+esc(j.error||"failed")+'</span>';
+}
 async function loadStats(manual){
   clearTimeout(statTimer);
   $("#statChips").innerHTML="";$("#statList").innerHTML='<div style="color:var(--mut)">Loading…</div>';
   $("#statErr").textContent="";
+  const st=await (await fetch("/api/yt/status")).json();
+  const keysOk=st.keys_saved,conn=st.connected;
+  $("#ytConnect").style.display=(!keysOk||!conn)?"block":"none";
+  $("#ytConnHint").textContent=!keysOk?"First save your YouTube app keys in ⚙ Settings (Client ID + secret), then come back.":"Connect once — then uploads and stats run without any browser steps.";
   const r=await fetch("/api/yt/analytics");const j=await r.json();
   if(j.error){
     $("#statList").innerHTML="";

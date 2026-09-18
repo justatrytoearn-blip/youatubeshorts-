@@ -330,6 +330,7 @@ This pipeline removes 100% of the manual editing labor so you can spend your ene
 
 | Symptom | Fix |
 |---|---|
+| `dlopen failed ... _rust.abi3.so` / cryptography import error on upload | **Fixed for good (Sept 2026):** uploads no longer use google-* packages. Update (`git pull`), `pip uninstall -y google-api-python-client google-auth-oauthlib cryptography`, reinstall requirements. If it persists: `pkg install python-cryptography` (Termux) |
 | `Set Pexels-API-Key` | edit `config/.env`, remove the word REPLACE |
 | `401/403` from Pexels | wrong key, or hourly 200-request limit hit (wait) |
 | `quotaExceeded` on upload | YouTube default quota = ~6 uploads/day; wait for reset (midnight PT) |

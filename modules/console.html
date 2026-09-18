@@ -165,6 +165,20 @@ pre{background:#0a0e15;border:1px solid var(--line);border-radius:10px;padding:1
   </div>
   <p id="provHint" style="font-size:12.5px;color:var(--mut);margin-top:8px"></p>
 
+  <label class="stlabel">API URL (leave as-is unless your provider says otherwise)</label>
+  <div class="row">
+    <input type="url" id="setBase" style="flex:1;min-width:200px">
+    <button onclick="saveSetting('OPENAI_BASE_URL',$('#setBase').value.trim())">Save URL</button>
+  </div>
+
+  <label class="stlabel">Model name</label>
+  <div class="row">
+    <input type="text" id="setModel" style="flex:1;min-width:160px" placeholder="e.g. gemini-2.5-flash">
+    <button onclick="saveSetting('AI_MODEL',$('#setModel').value.trim())">Save model</button>
+    <button class="btn2" onclick="loadModels()">Detect models</button>
+  </div>
+  <div id="modelPick" class="daypills" style="display:none"></div>
+
   <label class="stlabel">API key</label>
   <div class="row">
     <input type="password" id="setKey" placeholder="paste your API key here" style="flex:1;min-width:200px">
@@ -333,14 +347,14 @@ async function pollAI(){
 const HINTS={
  openai:{k:'Get a key at platform.openai.com/api-keys → "Create new secret key". Requires prepaid credit at platform.openai.com/settings/organization/billing (~$0.01/week of scripts).',u:'https://platform.openai.com/api-keys'},
  gemini:{k:'FREE: aistudio.google.com/apikey → "Create API key" (no credit card). Free tier is plenty for this pipeline. Key looks like AIza... .',u:'https://aistudio.google.com/apikey'},
- custom:{k:'Set OPENAI_BASE_URL + AI_MODEL directly in config/.env to point at any OpenAI-compatible server (Ollama, LM Studio, etc.). Key can be anything non-empty.'}
+ custom:{k:'Any OpenAI-compatible server (Ollama, LM Studio, OpenRouter…). Set the URL and model in the fields above; key can be anything non-empty.'}
 };
 function applyHints(p){
   document.querySelectorAll("#provPills .pill").forEach(b=>b.classList.toggle("on",b.dataset.p===p));
   const h=HINTS[p]||HINTS.openai;
   const kh=$("#keyHint");
   kh.innerHTML=h.u?`${esc(h.k)} <a href="${h.u}" target="_blank" style="color:var(--info)">Open key page ↗</a>`:esc(h.k);
-  $("#provHint").textContent={openai:"Current: OpenAI gpt-4o-mini (paid, needs credit)",gemini:"Current: FREE Google Gemini gemini-2.0-flash",custom:"Current: custom server from config/.env"}[p]||"";
+  $("#provHint").textContent={openai:"Current: OpenAI gpt-4o-mini (paid, needs credit)",gemini:"Current: FREE Google Gemini — recommended model: gemini-2.5-flash",custom:"Current: your own URL + model from the fields below"}[p]||"";
 }
 async function setProvider(p){
   const r=await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key:"AI_PROVIDER",value:p})});
@@ -357,8 +371,34 @@ async function loadSettings(){
   const r=await fetch("/api/settings");const j=await r.json();
   const p=j.provider||"openai";
   applyHints(p);
+  if($("#setBase"))$("#setBase").value=j.base_url||"";
+  if($("#setModel"))$("#setModel").value=j.model||"";
   $("#setStatus").innerHTML=(j.openai_configured?`✅ Key configured (${esc(j.masked)}) · provider: <b>${esc(p)}</b> · model: <b>${esc(j.model||"")}</b>`:'⚠ No API key yet — pick a provider above, paste the key, Save.')
     +(j.provider==="gemini"&&!j.openai_configured?' <span style="color:var(--warn)">Gemini selected but no key saved yet.</span>':"");
+}
+async function saveSetting(key,value){
+  if(!value){toast("Type a value first",true);return}
+  const r=await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({key,value})});
+  const j=await r.json();
+  if(j.ok){toast(key+" saved ✓");loadSettings()}else toast(j.error||"Save failed",true);
+}
+async function loadModels(){
+  const box=$("#modelPick");
+  box.style.display="none";box.innerHTML="";
+  $("#testOut").textContent="detecting…";
+  const r=await fetch("/api/ai-models");
+  const j=await r.json();
+  if(j.error){$("#testOut").textContent="❌ "+j.error;return}
+  if(!j.models.length){$("#testOut").textContent="❌ no chat models found for this key";return}
+  $("#testOut").textContent="✅ "+j.models.length+" models found";
+  box.innerHTML=j.models.slice(0,24).map(m=>`<button class="pill ${m===j.current?"on":""}" onclick="applyModel('${m}')">${m}</button>`).join("")
+    +`<div style="font-size:12px;color:var(--mut);width:100%">Tap a model to use it${j.suggested?` — suggested: <b>${j.suggested}</b>`:""}</div>`;
+  box.style.display="flex";
+}
+async function applyModel(m){
+  $("#setModel").value=m;
+  await saveSetting("AI_MODEL",m);
+  document.querySelectorAll("#modelPick .pill").forEach(b=>b.classList.toggle("on",b.textContent===m));
 }
 async function saveKey(){
   const v=$("#setKey").value.trim();

@@ -97,6 +97,17 @@ def set_env_key(key: str, value: str):
     os.environ[key] = value
 
 
+def _fix_retired_gemini_model():
+    """Old installs may have a retired Gemini model saved; auto-upgrade it."""
+    if os.environ.get("AI_PROVIDER") == "gemini":
+        m = os.environ.get("AI_MODEL", "")
+        if m.startswith(("gemini-1.5", "gemini-2.0")):
+            set_env_key("AI_MODEL", "gemini-2.5-flash")
+
+
+_fix_retired_gemini_model()
+
+
 @app.post("/api/settings")
 def api_settings():
     body = request.get_json(force=True, silent=True) or {}
@@ -107,12 +118,22 @@ def api_settings():
             return jsonify({"error": "provider must be openai, gemini or custom"}), 400
         set_env_key("AI_PROVIDER", value)
         if value == "gemini":
-            set_env_key("AI_MODEL", "gemini-2.0-flash")
+            set_env_key("AI_MODEL", "gemini-2.5-flash")
             set_env_key("OPENAI_BASE_URL", "https://generativelanguage.googleapis.com/v1beta/openai/")
         elif value == "openai":
             set_env_key("AI_MODEL", "gpt-4o-mini")
             set_env_key("OPENAI_BASE_URL", "https://api.openai.com/v1")
         return jsonify({"ok": True, "provider": value})
+    if key == "OPENAI_BASE_URL":
+        if not value.startswith(("http://", "https://")):
+            return jsonify({"error": "URL must start with http:// or https://"}), 400
+        set_env_key(key, value)
+        return jsonify({"ok": True})
+    if key == "AI_MODEL":
+        if not value:
+            return jsonify({"error": "value required"}), 400
+        set_env_key(key, value)
+        return jsonify({"ok": True})
     if key not in ("OPENAI_API_KEY",):
         return jsonify({"error": "unknown setting"}), 400
     if not value:
@@ -125,10 +146,55 @@ def api_settings():
 def api_settings_get():
     k = os.environ.get("OPENAI_API_KEY", "")
     has = bool(k.strip()) and "REPLACE" not in k
+    provider = os.environ.get("AI_PROVIDER", "openai")
+    default_base = ("https://generativelanguage.googleapis.com/v1beta/openai/"
+                    if provider == "gemini" else "https://api.openai.com/v1")
     return jsonify({"openai_configured": has,
                     "masked": (k[:7] + "…" + k[-4:]) if has else "",
-                    "provider": os.environ.get("AI_PROVIDER", "openai"),
-                    "model": os.environ.get("AI_MODEL", "gpt-4o-mini")})
+                    "provider": provider,
+                    "model": os.environ.get("AI_MODEL", "gpt-4o-mini"),
+                    "base_url": os.environ.get("OPENAI_BASE_URL", default_base)})
+
+
+@app.get("/api/ai-models")
+def api_ai_models():
+    """List chat models available to the saved key, so the user can pick a
+    working one instead of guessing (prevents 404 model errors)."""
+    import re
+    import requests
+
+    key = (os.environ.get("OPENAI_API_KEY") or "").strip()
+    base = os.environ.get("OPENAI_BASE_URL",
+                          "https://api.openai.com/v1").rstrip("/")
+    if not key or "REPLACE" in key:
+        return jsonify({"error": "save your API key first"}), 200
+    try:
+        r = requests.get(base + "/models",
+                         headers={"Authorization": "Bearer " + key},
+                         timeout=30)
+    except Exception as exc:  # noqa: BLE001
+        return jsonify({"error": f"could not reach {base}: {exc}"}), 200
+    if r.status_code != 200:
+        return jsonify({"error": f"HTTP {r.status_code} from {base}/models "
+                                 "— check key and URL"}), 200
+    try:
+        items = r.json().get("data") or r.json().get("models") or []
+    except Exception:  # noqa: BLE001
+        return jsonify({"error": "unexpected response from provider"}), 200
+    ids = []
+    for it in items:
+        mid = str(it.get("id") or it.get("name") or "")
+        mid = mid.split("models/")[-1]   # gemini native names: models/gemini-x
+        if not mid or re.search(r"embedding|aqa|imagen|veo|tts|audio|image"
+                                r"|live|whisper|moderation", mid, re.I):
+            continue
+        ids.append(mid)
+    ids = sorted(set(ids), reverse=True)
+    suggested = next((m for m in ids if "flash" in m and "thinking" not in m
+                      and "lite" not in m), ids[0] if ids else "")
+    return jsonify({"models": ids,
+                    "current": os.environ.get("AI_MODEL", ""),
+                    "suggested": suggested})
 
 
 def day_keys():
